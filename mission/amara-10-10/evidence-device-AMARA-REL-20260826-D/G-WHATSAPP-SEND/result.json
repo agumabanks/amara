@@ -1,0 +1,6 @@
+{
+  "gate_id": "G-WHATSAPP-SEND",
+  "result": "BLOCKED",
+  "reason": "No owner authorization present. Controlled WhatsApp send requires exact owner approval per Amara's policy. Per rules: 'Do not mark PASS for a send you cannot independently observe.' No second phone available to verify receipt.",
+  "owner_action_needed": "Owner must explicitly approve a specific WhatsApp send to a specific recipient with specific content."
+}

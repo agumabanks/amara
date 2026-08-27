@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content">
+
+    <LinearLayout
+        android:id="@+id/overlay_card"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|top"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@drawable/overlay_bg"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingTop="7dp"
+        android:paddingBottom="7dp"
+        android:elevation="6dp">
+
+        <FrameLayout
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginEnd="6dp">
+
+            <ImageView
+                android:id="@+id/overlay_icon"
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_overlay_ready"
+                android:contentDescription="Amara status" />
+
+            <View
+                android:id="@+id/overlay_pulse"
+                android:layout_width="6dp"
+                android:layout_height="6dp"
+                android:layout_gravity="top|end"
+                android:background="@drawable/overlay_dot_ready"
+                android:visibility="gone" />
+        </FrameLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/overlay_phase"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Ready"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.02"
+                android:maxLines="1"
+                android:fontFamily="sans-serif-medium" />
+
+            <TextView
+                android:id="@+id/overlay_detail"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Watching the business"
+                android:textColor="#80FFFFFF"
+                android:textSize="9.5sp"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:maxWidth="160dp"
+                android:fontFamily="sans-serif" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/overlay_expanded"
+        android:layout_width="260dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|top"
+        android:orientation="vertical"
+        android:background="@drawable/overlay_expanded_bg"
+        android:padding="18dp"
+        android:layout_marginTop="56dp"
+        android:visibility="gone"
+        android:elevation="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="12dp">
+
+            <ImageView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_overlay_ready"
+                android:layout_marginEnd="8dp" />
+
+            <TextView
+                android:id="@+id/overlay_expanded_phase"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Ready"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:fontFamily="sans-serif-medium" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/overlay_expanded_detail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Watching the business"
+            android:textColor="#B0FFFFFF"
+            android:textSize="12sp"
+            android:lineSpacingExtra="3dp"
+            android:fontFamily="sans-serif" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#22FFFFFF"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="10dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="SANAA AGENT"
+            android:textColor="#50E3C2"
+            android:textSize="9sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.15"
+            android:fontFamily="sans-serif-medium" />
+    </LinearLayout>
+</FrameLayout>

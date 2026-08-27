@@ -1,0 +1,36 @@
+{
+  "fixture": "sent_bubble",
+  "package": "com.whatsapp",
+  "targetVisible": true,
+  "nodes": [
+    {
+      "class": "android.widget.TextView",
+      "text": "Sanaa Office"
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Hello team, the baskets are ready",
+      "row": 2
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "12:01",
+      "row": 2
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "",
+      "contentDescription": "Delivered",
+      "row": 2
+    },
+    {
+      "class": "android.widget.EditText",
+      "editable": true,
+      "text": ""
+    }
+  ],
+  "expected": {
+    "verified": true,
+    "minConfidence": 0.8
+  }
+}

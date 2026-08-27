@@ -1,0 +1,2 @@
+  mCurrentFocus=Window{a40d18d u0 com.soko24.soko_seller_terminal/com.soko24.soko_seller_terminal.MainActivity}
+  mFocusedApp=ActivityRecord{575128b u0 com.soko24.soko_seller_terminal/.MainActivity t2014}

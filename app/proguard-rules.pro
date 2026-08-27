@@ -1,0 +1,54 @@
+# Flutter entry points and JNI methods are discovered outside normal Java calls.
+-keep class io.flutter.** { *; }
+-keep class co.sanaa.agent.core.NativeBridge { *; }
+-keepclasseswithmembernames class * { native <methods>; }
+-keep class co.sanaa.agent.services.AccessibilityAgentService { *; }
+-keep class co.sanaa.agent.services.AgentService { *; }
+-keep class co.sanaa.agent.services.AgentNotificationListenerService { *; }
+-keep class co.sanaa.agent.overlay.OverlayService { *; }
+-keep class co.sanaa.agent.workers.AgentWorker { *; }
+-keep class co.sanaa.agent.workers.MorningBroadcastWorker { *; }
+-keep class co.sanaa.agent.workers.ConversationPollWorker { *; }
+-keep class co.sanaa.agent.workers.ListingIntelligenceWorker { *; }
+-keep class co.sanaa.agent.workers.OwnerCommandWorker { *; }
+-keep class co.sanaa.agent.workers.ScheduledCommandWorker { *; }
+-keep class co.sanaa.agent.workers.CommercialCycleWorker { *; }
+-keep class co.sanaa.agent.workers.*AgentWorker { *; }
+-keep class * extends androidx.work.CoroutineWorker { <init>(...); }
+-keep class * extends androidx.work.ListenableWorker { <init>(...); }
+-keep class * extends androidx.work.Worker { <init>(...); }
+-keepclassmembers class * extends androidx.work.ListenableWorker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
+-keepclassmembers class * extends androidx.work.CoroutineWorker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
+-keep public class co.sanaa.agent.MainActivity { *; }
+-keep public class co.sanaa.agent.core.knowledge.** { *; }
+-keep public class co.sanaa.agent.certification.Certification { *; }
+-keepattributes Signature
+-keepattributes *Annotation*
+-keepattributes InnerClasses
+-keepattributes EnclosingMethod
+-keep class kotlin.Metadata { *; }
+-keep class kotlinx.coroutines.** { *; }
+-keep class okhttp3.** { *; }
+-keep class okio.** { *; }
+-keep class org.json.** { *; }
+-keep class com.google.gson.** { *; }
+-dontwarn javax.annotation.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
+-dontwarn com.google.android.play.core.**
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn com.google.crypto.tink.**
+-dontwarn com.google.firebase.**
+-dontwarn io.flutter.embedding.**
+-keep class io.flutter.embedding.** { *; }
+-keep class io.flutter.plugin.** { *; }
+-keep class io.flutter.plugins.** { *; }
+-keep class io.flutter.app.** { *; }
+-keep class io.flutter.view.** { *; }
+-keep class io.flutter.util.** { *; }
+-keep class io.flutter.** { *; }

@@ -1,0 +1,8 @@
+    codePath=/data/app/~~Tff8_lih1ZvYovLqLlvuqQ==/co.sanaa.agent-7Zya_5T05gO8tDMF3oi2Pg==
+    versionCode=12 minSdk=24 targetSdk=36
+    versionName=0.9.0
+    firstInstallTime=2026-08-20 08:49:34
+    lastUpdateTime=2026-08-25 20:29:51
+64f7bfaaf9a229801a66ae7ec000d69b80c528f2c426119c8b47f4332b552757  /tmp/kilo/installed.apk
+64f7bfaaf9a229801a66ae7ec000d69b80c528f2c426119c8b47f4332b552757  app/build/outputs/apk/release/app-release.apk
+2026-08-25T17:31:32Z

@@ -1,0 +1,72 @@
+{
+  "gate_id": "G-OVERLAY-STATES",
+  "states": {
+    "01_idle": {
+      "chip_state": "Amara&#10;Analysis stopped safely",
+      "all_descs": [
+        "Amara&#10;Analysis stopped safely",
+        "Stop current task",
+        "A&#10;Amara&#10;Needs attention",
+        "Stop current task",
+        "the soko terminal pin I 123456&#10;20:53",
+        "A&#10;This security identity action needs fresh approval for the exact target and change.&#10;20:53",
+        "hi&#10;20:54",
+        "A&#10;I couldn\u2019t analyze the task safely just now. Please try again in a moment.&#10;20:54",
+        "How I handled it&#10;0 verified steps",
+        "Attach a file",
+        "Send",
+        "Chat",
+        "Tools",
+        "Tasks"
+      ]
+    },
+    "02_active": {
+      "chip_state": "Amara&#10;No safe action available",
+      "all_descs": [
+        "Amara&#10;No safe action available",
+        "Stop current task",
+        "A&#10;Amara&#10;Needs attention",
+        "Stop current task",
+        "hi&#10;20:54",
+        "A&#10;I couldn\u2019t analyze the task safely just now. Please try again in a moment.&#10;20:54",
+        "Tell me a fun fact&#10;20:55",
+        "A&#10;I understand the outcome, but I don\u2019t yet have a safe phone action for it.&#10;20:55",
+        "How I handled it&#10;0 verified steps",
+        "Attach a file",
+        "Send",
+        "Chat",
+        "Tools",
+        "Tasks"
+      ]
+    },
+    "03_completed": {
+      "chip_state": "Amara&#10;No safe action available",
+      "all_descs": [
+        "Amara&#10;No safe action available",
+        "Stop current task",
+        "A&#10;Amara&#10;Needs attention",
+        "Stop current task",
+        "hi&#10;20:54",
+        "A&#10;I couldn\u2019t analyze the task safely just now. Please try again in a moment.&#10;20:54",
+        "Tell me a fun fact&#10;20:55",
+        "A&#10;I understand the outcome, but I don\u2019t yet have a safe phone action for it.&#10;20:55",
+        "How I handled it&#10;0 verified steps",
+        "Attach a file",
+        "Send",
+        "Chat",
+        "Tools",
+        "Tasks"
+      ]
+    },
+    "04_blocked": {
+      "chip_state": "(none)",
+      "all_descs": [
+        "Staff Login",
+        "Enter staff PIN",
+        "This is required to sync sales, cash movements, and privileged actions.",
+        "Sign in",
+        "If you're offline, enter your staff PIN and tap Sign in. Limited mode will activate automatically."
+      ]
+    }
+  }
+}

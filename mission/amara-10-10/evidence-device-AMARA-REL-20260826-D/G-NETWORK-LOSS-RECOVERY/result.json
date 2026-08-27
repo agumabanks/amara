@@ -1,0 +1,22 @@
+{
+  "gate_id": "G-NETWORK-LOSS-RECOVERY",
+  "phases": {
+    "phase1_pre": {
+      "airplane_mode": "0",
+      "ping_8.8.8.8": "ok",
+      "wifi": "Sanaa-Connect-5G"
+    },
+    "phase2_task_sent": "Tell me a short joke \u2192 agent replied with joke before network loss",
+    "phase3_airplane_on": {
+      "method": "cmd connectivity airplane-mode enable",
+      "result": "wireless ADB disconnected; device auto-reconnected on new mDNS port (41629)",
+      "agent_state_at_loss": "Active, task completed before loss"
+    },
+    "phase4_recovery": {
+      "airplane_mode_after": "0",
+      "ping_8.8.8.8": "ok",
+      "agent_state": "Active, Ready for the next thing",
+      "agent_recovery": "preserved chat history, responsive"
+    }
+  }
+}

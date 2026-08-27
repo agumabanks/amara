@@ -1,0 +1,23 @@
+{
+  "gate_id": "G-SOKO-ALERTS-READ",
+  "start_ts": "2026-08-26T16:38:42Z",
+  "end_ts": "2026-08-26T16:39:35Z",
+  "instruction": "Show%sme%smy%ssoko%salerts%sthat%sneed%saction",
+  "send_bounds": "[590,902][698,1010]",
+  "content_descs": [
+    "Amara&#10;Needs attention",
+    "Stop current task",
+    "A&#10;Amara&#10;Needs attention",
+    "Stop current task",
+    "A&#10;I could not use Soko Terminal because no usable Terminal PIN is available in the secure vault; the owner must configure it or unlock it after repeated rejections.&#10;19:37",
+    "Show me my soko alerts that need action&#10;19:39",
+    "A&#10;I could not use Soko Terminal because no usable Terminal PIN is available in the secure vault; the owner must configure it or unlock it after repeated rejections.&#10;19:39",
+    "How I handled it&#10;1 verified step",
+    "Attach a file",
+    "Send",
+    "Chat",
+    "Tools",
+    "Tasks"
+  ],
+  "texts": []
+}

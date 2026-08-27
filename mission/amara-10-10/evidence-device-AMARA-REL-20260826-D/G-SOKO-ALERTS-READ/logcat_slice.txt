@@ -1,0 +1,2 @@
+08-26 19:39:25.299  3170  3170 D InterruptionStateProvider: No bubble up: not allowed to bubble: 0|co.sanaa.agent|1055970760|null|10321
+08-26 19:39:25.303  3170  3170 W NotifBindPipeline: Row is not set so pipeline will not run. notif = 0|co.sanaa.agent|1055970760|null|10321

@@ -1,0 +1,17 @@
+{
+  "gate_id": "G-KEYGUARD-BLOCK",
+  "phases": {
+    "phase1_pre": "agent foreground, chat active",
+    "phase2_keyguard": {
+      "method": "input keyevent KEYCODE_POWER (26)",
+      "keyguard_state": "showing=true (dumpsys window)",
+      "agent_overlay_flag": "SHOW_WHEN_LOCKED on co.sanaa.agent overlay window",
+      "screen_capture": "notification shade reopened over keyguard (Oppo ColorOS behavior); keyguard system state confirmed true"
+    },
+    "phase3_unlock": {
+      "method": "input keyevent 26 + swipe up",
+      "result": "agent restored to foreground, mCurrentFocus=co.sanaa.agent/.MainActivity"
+    },
+    "typed_blocking": "agent chat input not accessible while keyguard occluded; recovery confirmed after unlock"
+  }
+}

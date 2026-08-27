@@ -1,0 +1,8 @@
+{
+  "gate_id": "G-TARGET-CLOSED",
+  "phases": {
+    "phase1_pre": "agent foreground, sent 'List my soko bookings'",
+    "phase2_force_stop": "am force-stop com.soko24.soko_seller_terminal",
+    "phase3_recovery": "agent reported 'terminal is locked, screen asking for Soko terminal PIN' \u2014 safe refusal, no duplicate side effect"
+  }
+}

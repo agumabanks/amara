@@ -1,0 +1,2 @@
+08-25 21:44:56.143 24068 24230 I SanaaGroq: Model call: stage=chat_text model=openai/gpt-oss-120b requestBytes=4
+08-25 21:44:57.077 24068 24230 I SanaaGroq: Model response: code=200 bodyLength=765

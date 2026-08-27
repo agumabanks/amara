@@ -1,0 +1,53 @@
+id,phase,title,status,device_gate
+M0-01,M0,Mission control files and checker,code_complete,no
+M0-02,M0,Baseline capability classification,code_complete,no
+M0-03,M0,Automated build and test gates,code_complete,no
+M1-01,M1,Encrypted Terminal PIN,oppo_verified,yes
+M1-02,M1,Permission and live binding health,oppo_verified,yes
+M1-03,M1,Distinct Terminal authentication states,oppo_verified,yes
+M1-04,M1,Authenticated Terminal and booking cold-start gate,oppo_blocked,yes
+M2-01,M2,Typed phone observation action risk receipt model,code_complete,no
+M2-02,M2,Semantic and learned selectors,code_complete,yes
+M2-03,M2,Adaptive human pacing and stability waits,code_complete,yes
+M2-04,M2,Interruption and backtracking recovery,code_complete,yes
+M2-05,M2,Screenshot capability and evidence storage,code_complete,yes
+M2-06,M2,50-action reliability suite,not_started,yes
+M3-01,M3,Terminal product coverage scan,oppo_verified,yes
+M3-02,M3,Terminal service text audit,code_complete,yes
+M3-03,M3,Bookings alerts orders stock Studio customers quotations,in_progress,yes
+M3-04,M3,Buyer app intelligence,in_progress,yes
+M3-05,M3,Terminal to Buyer cross-check,not_started,yes
+M3-06,M3,Structured shop-health findings,code_complete,no
+M3-07,M3,Natural-language Soko question suite,oppo_blocked,yes
+M4-01,M4,Listing screenshot capture,code_complete,yes
+M4-02,M4,Pluggable visual listing analyzer,code_complete,no
+M4-03,M4,Visual provenance and confidence guard,code_complete,no
+M4-04,M4,Labelled visual audit gate,not_started,yes
+M5-01,M5,Persistent approval requests,code_complete,no
+M5-02,M5,Chat approve reject follow-up,code_complete,no
+M5-03,M5,Exact listing edit save reopen verify,not_started,yes
+M5-04,M5,Fresh approval for high-impact changes,code_complete,no
+M5-05,M5,Approved Soko edit gate,not_started,yes
+M6-01,M6,WhatsApp direct group contact participants,oppo_verified,yes
+M6-02,M6,Inbound contextual monitoring and reply,code_complete,yes
+M6-03,M6,Attachments and Status,oppo_verified,yes
+M6-04,M6,Delivery missed calls follow-ups recovery,code_complete,yes
+M6-05,M6,Full WhatsApp reliability suite,not_started,yes
+M7-01,M7,Recurring instruction parser,code_complete,no
+M7-02,M7,Durable schedules idempotency retry quiet hours,code_complete,no
+M7-03,M7,User-activity guard and exclusive queue,code_complete,yes
+M7-04,M7,Periodic read-only shop audits,code_complete,yes
+M7-05,M7,Standing low-risk policies,code_complete,no
+M7-06,M7,Scheduling reboot and soak gate,not_started,yes
+M8-01,M8,TikTok screen mapping,not_started,yes
+M8-02,M8,TikTok media caption draft publish verify,code_complete,yes
+M8-03,M8,TikTok visible comment monitoring,not_started,yes
+M8-04,M8,TikTok reliability gate,not_started,yes
+M9-01,M9,Reusable per-app skill definitions,code_complete,no
+M9-02,M9,Credential risk stop and audit integration,code_complete,no
+M9-03,M9,Protected-screen classification and handoff,code_complete,no
+M9-04,M9,General phone task gate,not_started,yes
+M10-01,M10,Adversarial device recovery matrix,not_started,yes
+M10-02,M10,Repeated Soko to social end-to-end,not_started,yes
+M10-03,M10,24-hour soak certification,not_started,yes
+M10-04,M10,Signed release and final operations report,not_started,yes

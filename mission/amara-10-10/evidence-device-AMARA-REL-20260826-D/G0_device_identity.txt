@@ -1,0 +1,47 @@
+=== G0 DEVICE IDENTITY (Agent 4 redo — transport restored) ===
+Capture UTC: 2026-08-26T16:24:10Z
+
+[serial]    7aef1a4c
+[model]     CPH1933
+[brand]     OPPO
+[android]   11 (SDK 30)
+[tz]        Africa/Kampala
+[uptime]     19:24:21 up  2:01,  0 users,  load average: 50.51, 50.92, 43.09
+[hostname]  OP4B79L1
+
+--- battery ---
+  AC powered: true
+  USB powered: false
+  status: 2
+  level: 20
+  scale: 100
+  temperature: 324
+
+--- overlay service (SYSTEM_ALERT_WINDOW on co.sanaa.agent) ---
+com.google.android.apps.tachyon
+com.zhiliaoapp.musically
+com.liuzh.deviceinfo
+com.instagram.lite
+
+--- notification listener access ---
+0|co.sanaa.agent|1054247258|null|10321
+0|co.sanaa.agent|1047914258|null|10321
+0|co.sanaa.agent|1054068579|null|10321
+0|co.sanaa.agent|1048386010|null|10321
+0|co.sanaa.agent|1053978373|null|10321
+com.google.android.projection.gearhead/com.google.android.gearhead.notifications.SharedNotificationListenerManager$ListenerService:com.oppo.launcher/com.android.launcher3.notification.NotificationListener:co.sanaa.agent/co.sanaa.agent.services.AgentNotificationListenerService:com.coloros.deepthinker/com.coloros.eventhub.listener.NotificationListener
+
+--- accessibility services ---
+co.sanaa.agent/co.sanaa.agent.services.AccessibilityAgentService
+1
+
+--- co.sanaa.agent present? ---
+package:com.sanaa.finance_client_app.dev
+package:co.sanaa.media.tv
+package:co.sanaa.farzone_sos
+package:com.sanaa.soko24u.buyer
+package:co.sanaa.media.sanaa_mobile_app
+package:co.sanaa.farzone_provider
+package:ug.sanaa.baraka.baraka_mobile
+package:co.sanaa.agent
+package:com.sanaa.finance_rbac_app.dev

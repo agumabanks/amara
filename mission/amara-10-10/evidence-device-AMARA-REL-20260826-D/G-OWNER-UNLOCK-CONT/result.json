@@ -1,0 +1,6 @@
+{
+  "gate_id": "G-OWNER-UNLOCK-CONT",
+  "result": "INCOMPLETE",
+  "reason": "Owner not present. Gate requires an authorized owner to respond to the unlock prompt. The prior Soko Terminal PIN-typed-in-chat attempt by the owner was correctly refused by the agent ('This security identity action needs fresh approval for the exact target and change'). No owner available in this session to provide approval.",
+  "owner_action_needed": "Owner must be present at the device to approve the unlock for the exact target and change."
+}

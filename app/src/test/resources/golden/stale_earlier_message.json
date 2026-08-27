@@ -1,0 +1,37 @@
+{
+  "fixture": "stale_earlier_message",
+  "package": "com.whatsapp",
+  "targetVisible": true,
+  "nodes": [
+    {
+      "class": "android.widget.TextView",
+      "text": "Sanaa Office"
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Hello team, the baskets are ready",
+      "row": 1
+    },
+    {
+      "class": "android.widget.TextView",
+      "contentDescription": "Read",
+      "row": 1
+    },
+    {
+      "class": "android.widget.EditText",
+      "editable": true,
+      "text": "New unrelated draft",
+      "row": 5
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Typing\u2026",
+      "row": 5
+    }
+  ],
+  "expected": {
+    "verified": false,
+    "blockerContains": "already"
+  },
+  "preExistingContent": true
+}

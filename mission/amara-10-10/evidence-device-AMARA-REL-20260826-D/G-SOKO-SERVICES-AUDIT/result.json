@@ -1,0 +1,23 @@
+{
+  "gate_id": "G-SOKO-SERVICES-AUDIT",
+  "start_ts": "2026-08-26T16:39:46Z",
+  "end_ts": "2026-08-26T16:40:37Z",
+  "instruction": "Show%ssoko%sservices%saudit%sfor%sthis%sweek",
+  "send_bounds": "[590,902][698,1010]",
+  "content_descs": [
+    "Amara&#10;Needs attention",
+    "Stop current task",
+    "A&#10;Amara&#10;Needs attention",
+    "Stop current task",
+    "A&#10;I could not use Soko Terminal because no usable Terminal PIN is available in the secure vault; the owner must configure it or unlock it after repeated rejections.&#10;19:39",
+    "Show soko services audit for this week&#10;19:40",
+    "A&#10;I could not use Soko Terminal because no usable Terminal PIN is available in the secure vault; the owner must configure it or unlock it after repeated rejections.&#10;19:40",
+    "How I handled it&#10;1 verified step",
+    "Attach a file",
+    "Send",
+    "Chat",
+    "Tools",
+    "Tasks"
+  ],
+  "texts": []
+}

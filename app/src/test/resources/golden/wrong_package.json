@@ -1,0 +1,15 @@
+{
+  "fixture": "wrong_package",
+  "package": "com.android.systemui",
+  "targetVisible": true,
+  "nodes": [
+    {
+      "class": "android.widget.TextView",
+      "text": "Hello team, the baskets are ready"
+    }
+  ],
+  "expected": {
+    "verified": false,
+    "blockerContains": "Expected com.whatsapp"
+  }
+}

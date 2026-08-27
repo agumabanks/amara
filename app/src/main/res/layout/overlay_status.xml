@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/overlay_container"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:background="@drawable/overlay_bg"
+    android:paddingStart="14dp"
+    android:paddingEnd="10dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
+
+    <View
+        android:id="@+id/overlay_dot"
+        android:layout_width="9dp"
+        android:layout_height="9dp"
+        android:background="@drawable/overlay_dot_ready"
+        android:layout_marginEnd="9dp" />
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/overlay_phase"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Ready"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/overlay_detail"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Watching the business"
+            android:textColor="#B0FFFFFF"
+            android:textSize="10sp"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:maxWidth="180dp" />
+    </LinearLayout>
+</LinearLayout>

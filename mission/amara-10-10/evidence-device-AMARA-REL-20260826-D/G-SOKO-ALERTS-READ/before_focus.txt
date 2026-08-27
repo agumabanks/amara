@@ -1,0 +1,2 @@
+  mCurrentFocus=Window{90503bd u0 co.sanaa.agent/co.sanaa.agent.MainActivity}
+  mFocusedApp=ActivityRecord{d334032 u0 co.sanaa.agent/.MainActivity t2013}

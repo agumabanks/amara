@@ -1,0 +1,41 @@
+{
+  "fixture": "quoted_message",
+  "package": "com.whatsapp",
+  "targetVisible": true,
+  "nodes": [
+    {
+      "class": "android.widget.TextView",
+      "text": "Sanaa Office"
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Amara",
+      "row": 1
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Hello team, the baskets are ready",
+      "row": 1
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Thanks for the update!",
+      "row": 3
+    },
+    {
+      "class": "android.widget.TextView",
+      "contentDescription": "Read",
+      "row": 3
+    },
+    {
+      "class": "android.widget.EditText",
+      "editable": true,
+      "text": "",
+      "row": 9
+    }
+  ],
+  "expected": {
+    "verified": false,
+    "blockerContains": "delivery"
+  }
+}

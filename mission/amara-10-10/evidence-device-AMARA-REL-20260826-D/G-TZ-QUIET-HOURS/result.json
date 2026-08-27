@@ -1,0 +1,7 @@
+{
+  "gate_id": "G-TZ-QUIET-HOURS",
+  "tz_change": "BLOCKED - setprop persist.sys.timezone requires root; adb shell lacks su access; cannot change device TZ to test quiet hours behavior",
+  "current_tz": "Africa/Kampala",
+  "scheduler_state": "see dumpsys alarm output; co.sanaa.agent has scheduled alarms (see dumpsys alarm)",
+  "owner_action_needed": "owner must change TZ via Settings > Date & Time, or root the device"
+}

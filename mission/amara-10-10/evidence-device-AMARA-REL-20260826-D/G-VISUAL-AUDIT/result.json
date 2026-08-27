@@ -1,0 +1,15 @@
+{
+  "gate_id": "G-VISUAL-AUDIT",
+  "start_ts": "2026-08-26T16:49:10Z",
+  "end_ts": "2026-08-26T16:50:07Z",
+  "instruction": "View%sthe%slisting%sfor%sProfessional%sBulk%sSMS%sServices",
+  "send_bounds": "[590,902][698,1010]",
+  "content_descs": [
+    "Staff Login",
+    "Enter staff PIN",
+    "This is required to sync sales, cash movements, and privileged actions.",
+    "Sign in",
+    "If you're offline, enter your staff PIN and tap Sign in. Limited mode will activate automatically."
+  ],
+  "texts": []
+}

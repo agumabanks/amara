@@ -1,0 +1,8 @@
+{
+  "gate_id": "G-INTERRUPTION",
+  "phases": {
+    "phase1_kill": "am force-stop co.sanaa.agent during Soko bookings task processing",
+    "phase2_duplicate_check": "dumpsys jobscheduler shows single process, no duplicate job IDs spawned",
+    "phase3_relaunch": "agent relaunched, chat history preserved, agent responsive"
+  }
+}

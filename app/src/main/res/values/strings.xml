@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Sanaa Agent</string>
+    <string name="accessibility_description">Lets Sanaa Agent read customer messages and carry out approved WhatsApp and TikTok actions.</string>
+</resources>

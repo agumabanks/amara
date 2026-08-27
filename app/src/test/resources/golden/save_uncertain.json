@@ -1,0 +1,9 @@
+{
+  "fixture": "save_uncertain",
+  "package": "",
+  "nodes": [],
+  "expected": {
+    "verified": false,
+    "blockerContains": "reopen"
+  }
+}

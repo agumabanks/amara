@@ -1,0 +1,30 @@
+{
+  "fixture": "draft_plus_sent_copy",
+  "package": "com.whatsapp",
+  "targetVisible": true,
+  "nodes": [
+    {
+      "class": "android.widget.TextView",
+      "text": "Sanaa Office"
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Hello team, the baskets are ready",
+      "row": 2
+    },
+    {
+      "class": "android.widget.TextView",
+      "contentDescription": "Sent",
+      "row": 2
+    },
+    {
+      "class": "android.widget.EditText",
+      "editable": true,
+      "text": "Hello team, the baskets are ready",
+      "row": 7
+    }
+  ],
+  "expected": {
+    "verified": true
+  }
+}

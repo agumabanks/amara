@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.zhiliaoapp.musically" />
+        <package android:name="co.soko24.terminal" />
+        <package android:name="com.soko24.seller" />
+        <package android:name="com.soko24.soko_seller_terminal" />
+        <package android:name="com.sanaa.soko24u.buyer" />
+    </queries>
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <!-- Attachment sharing: images leave the device only inside an owner-approved
+         WhatsApp attachment transaction. Android 13+ uses the scoped media reader;
+         older builds use the legacy storage read. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_agent"
+        android:label="Sanaa Agent"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <!-- The deployed Oppo CPH1933/Android 11 Vulkan driver stalls before
+             Flutter's first frame under Impeller. OpenGL is the verified
+             compatibility renderer for this supported device. -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:exported="true"
+            android:hardwareAccelerated="true"
+            android:launchMode="singleTop"
+            android:theme="@style/AppTheme"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".services.AgentService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
+        <service
+            android:name=".services.AccessibilityAgentService"
+            android:exported="true"
+            android:label="Sanaa Agent"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <service
+            android:name=".services.AgentNotificationListenerService"
+            android:exported="true"
+            android:label="Sanaa Agent"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".receivers.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".receivers.ProofOfConceptReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="co.sanaa.agent.action.POC_WHATSAPP_SEND" />
+                <action android:name="co.sanaa.agent.action.TEST_WHATSAPP_READ_CHATS" />
+                <action android:name="co.sanaa.agent.action.TEST_WHATSAPP_MONITOR" />
+                <action android:name="co.sanaa.agent.action.TEST_WHATSAPP_READ_GROUP" />
+                <action android:name="co.sanaa.agent.action.TEST_WHATSAPP_ATTACHMENT" />
+                <action android:name="co.sanaa.agent.action.TEST_SOKO_STUDIO_SHARE" />
+                <action android:name="co.sanaa.agent.action.TEST_CONFIRM_STUDIO_SHARE" />
+            </intent-filter>
+        </receiver>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
+
+        <service
+            android:name=".overlay.OverlayService"
+            android:enabled="true"
+            android:exported="false" />
+    </application>
+</manifest>

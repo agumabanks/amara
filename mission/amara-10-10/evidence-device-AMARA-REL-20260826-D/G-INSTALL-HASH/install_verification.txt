@@ -1,0 +1,26 @@
+=== G-INSTALL-HASH verification ===
+Capture UTC: 2026-08-26T16:29:25Z
+
+[local frozen APK sha256]  e977e8a0f8e81e1a22a3f326b37bbfd2bab06959f0390a7ac21c571d42eec095
+[local file sha256]        e977e8a0f8e81e1a22a3f326b37bbfd2bab06959f0390a7ac21c571d42eec095
+
+--- install command ---
+adb -s 192.168.1.65:41001 install -r mission/amara-10-10/releases/AMARA-REL-20260826-D/app-release.apk
+result: Success (Performing Streamed Install)
+
+--- pulled base.apk on host (/tmp/sanaa-pulls/base.apk) ---
+-rw-r--r-- 1 root root 22194372 Aug 26 18:26 /tmp/sanaa-pulls/base.apk
+e977e8a0f8e81e1a22a3f326b37bbfd2bab06959f0390a7ac21c571d42eec095  /tmp/sanaa-pulls/base.apk
+
+--- on-device package metadata (after install) ---
+    userId=10321
+    primaryCpuAbi=arm64-v8a
+    versionCode=12 minSdk=24 targetSdk=36
+    versionName=0.9.0
+    firstInstallTime=2026-08-20 08:49:34
+    lastUpdateTime=2026-08-26 19:25:18
+    signatures=PackageSignatures{a91d7a5 version:2, signatures:[f630443a], past signatures:[]}
+
+--- device-side signature fingerprint (package manager) ---
+    signatures=PackageSignatures{a91d7a5 version:2, signatures:[f630443a], past signatures:[]}
+    installPermissionsFixed=true

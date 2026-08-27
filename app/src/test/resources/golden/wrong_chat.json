@@ -1,0 +1,26 @@
+{
+  "fixture": "wrong_chat",
+  "package": "com.whatsapp",
+  "targetVisible": false,
+  "nodes": [
+    {
+      "class": "android.widget.TextView",
+      "text": "Different Customer",
+      "row": 0
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Hello team, the baskets are ready",
+      "row": 1
+    },
+    {
+      "class": "android.widget.TextView",
+      "contentDescription": "Delivered",
+      "row": 1
+    }
+  ],
+  "expected": {
+    "verified": false,
+    "blockerContains": "target"
+  }
+}

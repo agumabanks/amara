@@ -1,0 +1,43 @@
+# G0 — Corrected-APK install identity proof (device-corrective campaign 2026-08-26)
+# Captured live over the SSH-forwarded ADB bridge. Raw command output below, verbatim.
+
+# --- adb devices -l (after reconnect, 2026-08-26T01:46Z approx) ---
+List of devices attached
+192.168.1.66:41167     device product:CPH1933 model:CPH1933 device:OP4B79L1 transport_id:1
+
+# --- adb shell getprop (identity) ---
+ro.serialno=7aef1a4c
+ro.product.manufacturer=OPPO
+ro.product.model=CPH1933
+ro.build.version.release=11
+
+# --- adb shell date; adb shell uptime ---
+Wed Aug 26 01:47:42 EAT 2026
+ 01:47:44 up 1 day, 29 min,  0 users,  load average: 1.57, 0.93, 3.73
+
+# --- pre-install package state (still running 64f7bfaa build) ---
+versionCode=12 minSdk=24 targetSdk=36
+versionName=0.9.0
+firstInstallTime=2026-08-20 08:49:34
+lastUpdateTime=2026-08-25 20:29:51
+
+# --- adb install -r app/build/outputs/apk/release/app-release.apk ---
+Performing Streamed Install
+Success
+INSTALL_EXIT=0
+
+# --- post-install package state (corrected build) ---
+versionCode=12 minSdk=24 targetSdk=36
+versionName=0.9.0
+firstInstallTime=2026-08-20 08:49:34
+lastUpdateTime=2026-08-26 02:00:02
+package:/data/app/~~ymT_0ZCqP7w0B_oz8onofA==/co.sanaa.agent-p8apvLxkmyC_RzxECkG1JQ==/base.apk
+
+# --- installed-vs-local hash comparison (adb pull then sha256sum) ---
+50180cef7d6d6034c8996271821075a5974198f4a1d311504d1abe859adaee57  /tmp/kilo/installed_corrected.apk
+50180cef7d6d6034c8996271821075a5974198f4a1d311504d1abe859adaee57  app/build/outputs/apk/release/app-release.apk
+
+# --- local APK signing verification (apksigner verify --print-certs) ---
+Signer #1 certificate DN: CN=Sanaa Agent, O=Sanaa Media, C=UG
+Signer #1 certificate SHA-256 digest: 55e237c9c2079f3e413d2b3d00e84a6c577a5c731c837bbefd49f64fd41ea6c4
+SIGN_EXIT=0

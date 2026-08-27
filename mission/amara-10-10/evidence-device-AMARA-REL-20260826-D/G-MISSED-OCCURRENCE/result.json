@@ -1,0 +1,10 @@
+{
+  "gate_id": "G-MISSED-OCCURRENCE",
+  "result": "INCOMPLETE",
+  "reason": "Cannot schedule a recurring owner command from agent4 (no scheduling UI accessible via adb). The owner must use the agent's chat or a dedicated scheduling surface to set a recurring command. Pre-existing scheduled jobs observed in dumpsys alarm/jobscheduler (WorkManager, ~2h latency) but these are internal agent tasks, not owner-scheduled occurrences.",
+  "observed": {
+    "alarm_count": 1,
+    "job_count": 17,
+    "sample_job": "WorkManager SystemJobService, minimum latency +1h59m"
+  }
+}

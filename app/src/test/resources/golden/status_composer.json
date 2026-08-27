@@ -1,0 +1,20 @@
+{
+  "fixture": "status_composer",
+  "package": "com.whatsapp",
+  "targetVisible": true,
+  "nodes": [
+    {
+      "class": "android.widget.EditText",
+      "editable": true,
+      "text": "Fresh stock today!"
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Add status"
+    }
+  ],
+  "expected": {
+    "verified": false,
+    "blockerContains": "draft"
+  }
+}

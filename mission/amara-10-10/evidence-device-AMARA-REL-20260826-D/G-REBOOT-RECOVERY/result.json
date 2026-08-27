@@ -1,0 +1,19 @@
+{
+  "gate_id": "G-REBOOT-RECOVERY",
+  "phases": {
+    "phase1_pre_reboot": {
+      "uptime": "3:24",
+      "agent_focus": "co.sanaa.agent/.MainActivity"
+    },
+    "phase2_reboot": "adb reboot sent",
+    "phase3_post_reboot": {
+      "boot_completed": "1",
+      "uptime": "5 min",
+      "agent_package": "preserved (lastUpdateTime unchanged)",
+      "scheduled_jobs": "re-registered (new job IDs 732, 733 \u2014 WorkManager reschedule confirmed)",
+      "duplicate_check": "single agent process, jobs not duplicated",
+      "agent_chat": "history preserved, agent responsive",
+      "security_note": "owner typed 'soko terminal pin I 123456' in chat; agent correctly refused: 'This security identity action needs fresh approval'"
+    }
+  }
+}

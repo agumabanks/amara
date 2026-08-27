@@ -1,0 +1,38 @@
+{
+  "gate_id": "G-WRONG-FOREGROUND",
+  "instruction": "What are my newest soko bookings",
+  "home_screen_descs": [
+    "Clock",
+    "19:52",
+    "Refresh",
+    "Search",
+    "Google Search",
+    "Search",
+    "Calendar",
+    "Theme Store",
+    "Weather",
+    "Folder: Tools",
+    "Photos",
+    "Play Store",
+    "Settings",
+    "Folder: Google",
+    "Phone, has 2 notifications",
+    "Messages, has 17 notifications",
+    "Chrome"
+  ],
+  "agent_reentry_descs": [
+    "Amara&#10;Needs attention",
+    "Stop current task",
+    "A&#10;Amara&#10;Needs attention",
+    "Stop current task",
+    "A&#10;Outcome: I opened the Soko marketplace app (com.soko24.soko_seller_terminal) and successfully viewed the Professional Bulk\u202fSMS\u202fServices listing in the foreground. No issues arose during the audit, and the listing details were fetched without any changes. All looks good on my end.&#10;19:49",
+    "What are my newest soko bookings&#10;19:51",
+    "A&#10;Outcome: I wasn\u2019t able to pull the newest Soko bookings today.  &#10;Blocker: the Soko Terminal app is locked \u2013 there\u2019s no PIN stored in the secure vault, so I couldn\u2019t access the alerts.  &#10;Once you set or unlock the terminal PIN, I can retrieve the latest bookings right away.&#10;19:51",
+    "How I handled it&#10;1 verified step",
+    "Attach a file",
+    "Send",
+    "Chat",
+    "Tools",
+    "Tasks"
+  ]
+}

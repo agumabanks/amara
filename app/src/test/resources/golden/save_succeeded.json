@@ -1,0 +1,19 @@
+{
+  "fixture": "save_succeeded",
+  "package": "com.soko24.soko_seller_terminal",
+  "nodes": [
+    {
+      "class": "android.widget.EditText",
+      "editable": true,
+      "text": "Thermal Mini Printer X8"
+    },
+    {
+      "class": "android.widget.EditText",
+      "editable": true,
+      "text": "450000"
+    }
+  ],
+  "expected": {
+    "verified": true
+  }
+}

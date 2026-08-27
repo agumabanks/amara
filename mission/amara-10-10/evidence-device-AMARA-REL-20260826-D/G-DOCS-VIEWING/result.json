@@ -1,0 +1,12 @@
+{
+  "gate_id": "G-DOCS-VIEWING",
+  "phases": {
+    "png": {
+      "file": "test_doc.png (50x50 red, pushed to /sdcard/Download/)",
+      "intent": "am start -a VIEW -t image/png",
+      "focus_after": "mCurrentFocus=Window{744665 u0 android/com.android.internal.app.ResolverActivity}"
+    },
+    "pdf": "NOT TESTED - no PDF file on device; would require push + intent",
+    "pptx": "NOT TESTED - no PPTX file on device; would require push + intent"
+  }
+}

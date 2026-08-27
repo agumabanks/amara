@@ -1,0 +1,15 @@
+{
+  "fixture": "save_failed",
+  "package": "com.soko24.soko_seller_terminal",
+  "nodes": [
+    {
+      "class": "android.widget.EditText",
+      "editable": true,
+      "text": "Thermal Mini Printer (old name)"
+    }
+  ],
+  "expected": {
+    "verified": false,
+    "blockerContains": "SAVE_NOT_PROVEN"
+  }
+}

@@ -1,0 +1,1 @@
+  mCurrentFocus=Window{744665 u0 android/com.android.internal.app.ResolverActivity}

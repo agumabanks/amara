@@ -1,0 +1,1 @@
+  mCurrentFocus=Window{644d20b u0 co.sanaa.agent/co.sanaa.agent.MainActivity}

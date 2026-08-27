@@ -1,0 +1,1 @@
+{"gate_id":"G-WHATSAPP-INBOUND-CLASSIFY","result":"BLOCKED","reason":"No second phone available to send a real inbound WhatsApp message.","owner_action_needed":"Owner must provide a second phone to send a test inbound WhatsApp message."}

@@ -1,0 +1,22 @@
+{
+  "fixture": "published_status",
+  "package": "com.whatsapp",
+  "targetVisible": true,
+  "nodes": [
+    {
+      "class": "android.widget.TextView",
+      "text": "My status"
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Fresh stock today!"
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "2 minutes ago"
+    }
+  ],
+  "expected": {
+    "verified": true
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "fixture": "tiktok_public_post",
+  "package": "com.zhiliaoapp.musically",
+  "targetVisible": true,
+  "nodes": [
+    {
+      "class": "android.widget.TextView",
+      "text": "Amara Sanaa"
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "Market day vibes #kampala"
+    },
+    {
+      "class": "android.widget.TextView",
+      "text": "12-1"
+    }
+  ],
+  "expected": {
+    "verified": true
+  }
+}

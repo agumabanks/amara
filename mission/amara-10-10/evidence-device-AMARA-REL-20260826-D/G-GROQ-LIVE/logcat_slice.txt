@@ -1,0 +1,2 @@
+08-26 19:42:56.165 22847 23102 I SanaaGroq: Model call: stage=planner_plan model=openai/gpt-oss-120b requestBytes=5
+08-26 19:42:57.508 22847 23102 I SanaaGroq: Model response: code=200 bodyLength=1481

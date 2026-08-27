@@ -1,0 +1,20 @@
+{
+  "gate_id": "G-A11Y-LOSS-RECOVERY",
+  "phases": {
+    "phase1_a11y_on": {
+      "settings_accessibility_enabled": "1",
+      "service": "co.sanaa.agent/co.sanaa.agent.services.AccessibilityAgentService"
+    },
+    "phase2_a11y_disabled": {
+      "method": "Settings > Accessibility > Sanaa Agent > toggle (swipe gesture required) > Stop confirmation",
+      "settings_accessibility_enabled_after": "0",
+      "agent_chat_input": "still functional via keyboard (no a11y-based screen reading), but screen-based actions would be blocked"
+    },
+    "phase3_re_enabled": {
+      "settings_accessibility_enabled": "1",
+      "service_rebound": "co.sanaa.agent/co.sanaa.agent.services.AccessibilityAgentService",
+      "agent_response": "Yes, I can hear you! How can I help you today?",
+      "chip": "Active, Ready for the next thing"
+    }
+  }
+}
