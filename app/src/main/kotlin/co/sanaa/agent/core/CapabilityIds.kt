@@ -59,6 +59,7 @@ object CapabilityIds {
     const val SHARE_SOKO_STUDIO_CAPTION = "share_soko_studio_caption"
 
     // TikTok
+    const val TIKTOK_PUBLIC_COMMENT = "tiktok_public_comment"
     const val POST_TIKTOK = "post_tiktok"
     const val TIKTOK_ANALYTICS = "tiktok_analytics"
     const val TIKTOK_COMMENTS = "tiktok_comments"

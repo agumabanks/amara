@@ -75,6 +75,26 @@ class BackendSync(private val context: Context, private val config: SecureConfig
         return post("generate-ad", JSONObject().put("device_id", config.deviceId).put("listing", listing.raw))
     }
 
+    suspend fun saveMemorySnapshot(snapshot: JSONObject): JSONObject {
+        require(config.memoryBackupEnabled) { "Memory backup is disabled by the owner." }
+        ensureRegistered()
+        return post("memory", JSONObject()
+            .put("device_id", config.deviceId)
+            .put("schema_version", snapshot.optInt("schema_version", 1))
+            .put("snapshot", snapshot))
+    }
+
+    suspend fun latestMemorySnapshot(): JSONObject {
+        require(config.memoryBackupEnabled) { "Memory backup is disabled by the owner." }
+        ensureRegistered()
+        return get("memory/${config.deviceId}")
+    }
+
+    private suspend fun ensureRegistered() {
+        ensureDeviceId()
+        if (config.agentToken.isBlank()) registerAndSync()
+    }
+
     private fun ensureDeviceId() {
         if (config.deviceId.isBlank()) config.deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown-device"
     }

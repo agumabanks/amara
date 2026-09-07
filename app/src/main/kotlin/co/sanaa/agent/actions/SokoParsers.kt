@@ -64,7 +64,12 @@ internal object SokoAlertParser {
             lines[0].equals("Low stock", true) -> "Low stock"
             else -> "Booking"
         }
-        SokoAlert(type, lines[0], lines[1])
+        val subject = if (type == "Low stock") {
+            lines[1].substringBefore('•').trim().ifBlank { lines[1] }
+        } else {
+            lines[0]
+        }
+        SokoAlert(type, subject, lines[1])
     }.distinctBy { "${it.type}|${it.subject}|${it.detail}".lowercase() }
 }
 

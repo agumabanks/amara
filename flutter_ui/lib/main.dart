@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'screens/onboarding/onboarding_screen.dart';
+import 'screens/home/home_screen.dart';
+import 'screens/work/work_screen.dart';
+import 'screens/market/market_screen.dart';
+import 'screens/settings/settings_screen.dart';
 import 'screens/chat/chat_tab.dart';
-import 'screens/tools/tools_tab.dart';
-import 'screens/tasks/tasks_tab.dart';
+import 'screens/onboarding/onboarding_screen.dart';
 import 'bridge/agent_channel.dart';
 
 void main() {
@@ -13,6 +15,7 @@ void main() {
 
 class SanaaAgentApp extends StatelessWidget {
   const SanaaAgentApp({super.key});
+
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'Sanaa Agent',
@@ -61,13 +64,21 @@ class AppShell extends StatefulWidget {
   const AppShell({super.key});
 
   @override
-  State<AppShell> createState() => _AppShellState();
+  State<AppShell> createState() => AppShellState();
 }
 
-class _AppShellState extends State<AppShell> {
+class AppShellState extends State<AppShell> {
   int _index = 0;
 
-  static const _tabs = [ChatTab(), ToolsTab(), TasksTab()];
+  void switchTab(int index) => setState(() => _index = index);
+
+  static const _tabs = [
+    HomeScreen(),
+    WorkScreen(),
+    MarketScreen(),
+    ChatTab(),
+    SettingsScreen(),
+  ];
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -81,13 +92,20 @@ class _AppShellState extends State<AppShell> {
       ),
       child: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _navItem(0, Icons.chat_bubble_outline, Icons.chat_bubble, 'Chat'),
-              _navItem(1, Icons.handyman_outlined, Icons.handyman, 'Tools'),
-              _navItem(2, Icons.task_outlined, Icons.task, 'Tasks'),
+              _navItem(0, Icons.home_outlined, Icons.home, 'Home'),
+              _navItem(1, Icons.work_outline, Icons.work, 'Work'),
+              _navItem(
+                2,
+                Icons.trending_up_outlined,
+                Icons.trending_up,
+                'Market',
+              ),
+              _navItem(3, Icons.chat_bubble_outline, Icons.chat_bubble, 'Chat'),
+              _navItem(4, Icons.settings_outlined, Icons.settings, 'Settings'),
             ],
           ),
         ),
@@ -102,7 +120,7 @@ class _AppShellState extends State<AppShell> {
       onTap: () => setState(() => _index = i),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: active
               ? const Color(0xFF50E3C2).withValues(alpha: 0.12)
@@ -115,13 +133,13 @@ class _AppShellState extends State<AppShell> {
             Icon(
               active ? activeIcon : icon,
               color: active ? const Color(0xFF50E3C2) : Colors.white38,
-              size: 22,
+              size: 20,
             ),
             const SizedBox(height: 4),
             Text(
               label,
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 10,
                 fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                 color: active ? const Color(0xFF50E3C2) : Colors.white38,
               ),
@@ -131,4 +149,17 @@ class _AppShellState extends State<AppShell> {
       ),
     );
   }
+}
+
+/// Global accessor for tab switching from child screens
+AppShellState? getAppShellState(BuildContext context) {
+  AppShellState? state;
+  context.visitAncestorElements((element) {
+    if (element is StatefulElement && element.state is AppShellState) {
+      state = element.state as AppShellState;
+      return false;
+    }
+    return true;
+  });
+  return state;
 }

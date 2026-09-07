@@ -17,6 +17,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class DeviceActivityMonitorTest {
     @After fun reset() = DeviceActivityMonitor.resetForTest()
 
@@ -31,6 +33,31 @@ class DeviceActivityMonitorTest {
         DeviceActivityMonitor.observe(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED, 10_000)
         DeviceActivityMonitor.endAutomation()
         assertFalse(DeviceActivityMonitor.isUserLikelyActive(20_000, 30_000))
+    }
+
+    @Test fun passiveWindowChangesDoNotPretendTheOwnerTouchedThePhone() {
+        DeviceActivityMonitor.observe(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED, 10_000)
+        assertFalse(DeviceActivityMonitor.isUserLikelyActive(20_000, 30_000))
+    }
+
+    @Test fun delayedAutomationClickDoesNotBecomeOwnerActivity() {
+        DeviceActivityMonitor.beginAutomation()
+        DeviceActivityMonitor.endAutomation(atUptimeMillis = 1_000)
+        DeviceActivityMonitor.observe(AccessibilityEvent.TYPE_VIEW_CLICKED, 20_000, 950)
+        assertFalse(DeviceActivityMonitor.isUserLikelyActive(20_001))
+        DeviceActivityMonitor.observe(AccessibilityEvent.TYPE_VIEW_CLICKED, 20_002, 1_001)
+        assertTrue(DeviceActivityMonitor.isUserLikelyActive(20_003))
+    }
+
+    @Test fun nestedAutomationKeepsSuppressingUiEventsUntilReleased() {
+        DeviceActivityMonitor.beginAutomation()
+        DeviceActivityMonitor.beginAutomation()
+        DeviceActivityMonitor.endAutomation(atUptimeMillis = 1_000)
+        DeviceActivityMonitor.observe(AccessibilityEvent.TYPE_VIEW_SCROLLED, 20_000, 1_100)
+        assertFalse(DeviceActivityMonitor.isUserLikelyActive(20_001))
+        DeviceActivityMonitor.endAutomation(atUptimeMillis = 1_200)
+        DeviceActivityMonitor.observe(AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED, 20_002, 1_150)
+        assertFalse(DeviceActivityMonitor.isUserLikelyActive(20_003))
     }
 }
 
@@ -133,27 +160,25 @@ class DeviceAvailabilityGuardTest {
     }
 
     @Test
-    fun nonsecureKeyguardClearingWithinTheDismissWindowIsAvailable() = runBlocking {
+    fun nonsecureKeyguardIsNotTreatedAsACredentialBarrier() = runBlocking {
         setInteractive(true)
         setLocked(true)
         setSecure(false)
-        // The first dismiss wait clears the swipe-only lock.
-        val sleeper = ScriptedSleeper { call -> if (call == 0) setLocked(false) }
-        val result = guard(sleeper)
+        val result = guard()
         assertTrue(result.available)
         assertEquals(AvailabilityBlocker.NONE, result.blocker)
     }
 
     @Test
-    fun nonsecureKeyguardThatNeverClearsIsReportedUnavailable() = runBlocking {
+    fun nonsecureKeyguardDoesNotRequirePollingOrCredentialEntry() = runBlocking {
         setInteractive(true)
         setLocked(true)
         setSecure(false)
         val sleeper = ScriptedSleeper { }
         val result = guard(sleeper)
-        assertFalse(result.available)
-        assertEquals(AvailabilityBlocker.NONSECURE_KEYGUARD, result.blocker)
-        assertEquals("dismiss window is exactly three polls", 3, sleeper.calls)
+        assertTrue(result.available)
+        assertEquals(AvailabilityBlocker.NONE, result.blocker)
+        assertEquals("only the final double-check should wait", 1, sleeper.calls)
     }
 
     @Test

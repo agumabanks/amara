@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="agent_creatives" path="agent-creatives/" />
+    <files-path name="bound_tiktok_media" path="tiktok-bound-media/" />
+    <files-path name="bound_whatsapp_media" path="whatsapp-bound-media/" />
 </paths>

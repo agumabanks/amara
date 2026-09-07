@@ -98,7 +98,7 @@ data class BrainFailureRecord(
 )
 
 /** Private, device-only memory stored at databases/amara_memory.db. */
-class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 15) {
+class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 21) {
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
@@ -2047,6 +2047,16 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         arrayOf(type, target, sinceMillis.toString(), "%$commandContains%"),
     ).use { it.moveToFirst() }
 
+    /** Newest-first product targets attempted by the TikTok worker. Attempts, not just
+     * verified posts, are included so uncertain publications cannot be duplicated. */
+    @Synchronized
+    fun recentTikTokProductTargets(sinceMillis: Long, limit: Int = 50): List<String> = readableDatabase.rawQuery(
+        """SELECT target_contact FROM actions
+           WHERE type = 'tiktok_post' AND target_contact IS NOT NULL AND timestamp >= ?
+           ORDER BY timestamp DESC LIMIT ?""".trimIndent(),
+        arrayOf(sinceMillis.toString(), limit.coerceIn(1, 200).toString()),
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+
     @Synchronized
     fun ownerChatHistory(limit: Int = 100): List<MemoryChatMessage> {
         val descending = readableDatabase.query(
@@ -2288,6 +2298,22 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
      */
     @Synchronized
     fun scrubSecrets(vault: CredentialVault? = null): Int = SecretScrubber.scrub(writableDatabase, vault)
+
+    fun getRecentSalesCount(days: Int): Int {
+        val cutoff = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
+        return readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM revenue_sales WHERE occurred_at >= ? AND state = 'ACTIVE'",
+            arrayOf(cutoff.toString())
+        ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+    }
+
+    fun getRecentRevenue(days: Int): Long {
+        val cutoff = System.currentTimeMillis() - (days * 24 * 60 * 60 * 1000L)
+        return readableDatabase.rawQuery(
+            "SELECT COALESCE(SUM(amount_ugx), 0) FROM revenue_sales WHERE occurred_at >= ? AND state = 'ACTIVE'",
+            arrayOf(cutoff.toString())
+        ).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+    }
 
     companion object {
         const val DATABASE_NAME = "amara_memory.db"

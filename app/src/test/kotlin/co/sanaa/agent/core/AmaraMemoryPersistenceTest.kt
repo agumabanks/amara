@@ -58,7 +58,7 @@ class AmaraMemoryPersistenceTest {
             "revenue_delivery_observations",
             "failure_records", "brain_failures",
         ).forEach { table -> assertTrue("Missing table $table", table in tables) }
-        assertEquals(15, db.version)
+        assertEquals(21, db.version)
         db.close()
     }
 
@@ -79,7 +79,7 @@ class AmaraMemoryPersistenceTest {
             db.execSQL("INSERT INTO brain_failures (created_at, stage, model, disposition) VALUES (1, 'planner_plan', 'legacy-model', 'FAILED_PERMANENT')")
         }
         AmaraMemory(context).readableDatabase.use { db ->
-            assertEquals(15, db.version)
+            assertEquals(21, db.version)
             val columns = mutableSetOf<String>()
             db.rawQuery("PRAGMA table_info(brain_failures)", null).use { cursor ->
                 while (cursor.moveToNext()) columns.add(cursor.getString(1))
@@ -294,7 +294,7 @@ class AmaraMemoryPersistenceTest {
         assertEquals(0, countRows("actions"))
         assertEquals(0, countRows("side_effect_transactions"))
         // Schema survives so the app keeps functioning after deletion.
-        assertEquals(15, SQLiteDatabase.openDatabase(
+        assertEquals(21, SQLiteDatabase.openDatabase(
             context.getDatabasePath(AmaraMemory.DATABASE_NAME).path, null, SQLiteDatabase.OPEN_READONLY,
         ).use { it.version })
     }

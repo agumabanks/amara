@@ -12,6 +12,7 @@ import co.sanaa.agent.api.GroqClient
 import co.sanaa.agent.api.SokoApiClient
 import co.sanaa.agent.core.AmaraMemory
 import co.sanaa.agent.core.ContactDirectory
+import co.sanaa.agent.core.ChatStore
 import co.sanaa.agent.core.ContactDirectoryProvider
 import co.sanaa.agent.core.ContactDirectoryStore
 import co.sanaa.agent.core.ContactPermission
@@ -91,6 +92,7 @@ class UnmonitoredPrivacyTest {
             config, SokoApiClient(config), GroqClient(config, memory, allowInsecureTestEndpoint = true),
             backend, actions, verifier, state, NotificationReporter(context),
             memory, TaskQueue(), SideEffectRunner(SideEffectLedger.from(memory)),
+            ChatStore(context),
             revenueIngestion = revenueIngestion,
         )
     }

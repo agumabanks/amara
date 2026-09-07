@@ -463,6 +463,11 @@ object CapabilityCatalog {
             workflowAuthorized = true,
             recurringAllowed = true,
         ),
+        internalCommunicationSpec(
+            CapabilityIds.TIKTOK_PUBLIC_COMMENT, "Contextual TikTok comment",
+            "Owner-enabled, rate-limited contextual comment on an exact observed public post.",
+            VerifierKind.TARGET_CONTENT_DELIVERY, setOf("com.zhiliaoapp.musically"),
+        ),
         observeSpec(
             "tiktok_analytics", "TikTok analytics",
             "read TikTok profile analytics (views, likes, comments, shares, followers)",

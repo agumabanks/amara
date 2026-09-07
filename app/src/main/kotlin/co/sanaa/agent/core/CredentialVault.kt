@@ -108,7 +108,7 @@ class CredentialVault(
     private val prefs by lazy { storePath.getSharedPreferences("credential_vault", Context.MODE_PRIVATE) }
 
     @Synchronized
-    fun store(id: String, targetPackage: String, purpose: String, secret: CharArray): CredentialResult {
+    fun store(id: String, targetPackage: String, purpose: String, secret: CharArray, ownerConfirmedReset: Boolean = false): CredentialResult {
         validateScope(id, targetPackage)
         require(secret.isNotEmpty()) { "A blank credential cannot be stored" }
         try {
@@ -127,7 +127,8 @@ class CredentialVault(
             val committed = prefs.edit()
                 .putString(cipherKey(id), blob.first)
                 .putString(ivKey(id), blob.second)
-                .putString(metaKey(id), buildMetaJson(targetPackage, purpose, predecessor))
+                .putString(metaKey(id), buildMetaJson(targetPackage, purpose,
+                    if (ownerConfirmedReset) predecessor?.copy(consecutiveValidationFailures = 0) else predecessor))
                 .remove(writePendingKey(id))
                 .commit()
             if (!committed) return CredentialResult.Failed(STORE_FAILED)

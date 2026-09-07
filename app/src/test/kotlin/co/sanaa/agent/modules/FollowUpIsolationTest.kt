@@ -53,7 +53,11 @@ class FakeSurfaceShadow {
     fun isAvailable(): Boolean = true
 
     @Implementation
-    suspend fun readWhatsAppConversation(target: String, maxScrolls: Int): WhatsAppChatContext? {
+    suspend fun readWhatsAppConversation(
+        target: String,
+        maxScrolls: Int,
+        inboundMessage: String?,
+    ): WhatsAppChatContext? {
         if (!conversationReadable) return null
         return WhatsAppChatContext(target, listOf(target, "customer asked about delivery"), false, null)
     }
@@ -69,6 +73,9 @@ class FakeSurfaceShadow {
         lastTyped = message
         return true
     }
+
+    @Implementation
+    fun `isExactWhatsAppConversation$app_debug`(target: String): Boolean = openedTarget == target
 
     @Implementation
     fun snapshot(): WhatsAppScreenSnapshot = WhatsAppScreenSnapshot(

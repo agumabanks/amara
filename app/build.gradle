@@ -11,8 +11,8 @@ android {
         applicationId "co.sanaa.agent"
         minSdk 24
         targetSdk 36
-        versionCode 12
-        versionName "0.9.0"
+        versionCode 13
+        versionName "0.10.0"
 
         // The dedicated Oppo test device is ARM64. Keeping one ABI avoids a
         // universal APK that bundles three copies of Flutter and JNI engines.

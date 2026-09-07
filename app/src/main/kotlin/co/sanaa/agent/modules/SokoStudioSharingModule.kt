@@ -91,12 +91,15 @@ class SokoStudioSharingModule(
                 act = { actions.sharePreparedSokoAdToWhatsApp(target) },
                 verify = { verifiers.evaluateCurrentChat(target, ad.productName) },
             )
+            if (imageOutcome !is SideEffectOutcome.Verified && imageOutcome !is SideEffectOutcome.DuplicateBlocked) {
+                return fail(target, "Studio image delivery was not verified. No follow-up caption was sent; review the target chat before retrying.", ad.productName, ad.priceText)
+            }
             val captionOutcome = sideEffects.execute(
                 capabilityId = CapabilityIds.SHARE_SOKO_STUDIO_CAPTION,
                 idempotencyKey = "studio-caption:$target:${ContentHashing.hash(ad.productName)}:${ContentHashing.hash(caption)}",
                 target = target,
                 content = caption,
-                act = { actions.transacted { sendInCurrentChat(caption) } },
+                act = { actions.transacted { sendToWhatsAppContact(target, caption) } },
                 verify = { verifiers.evaluateCurrentChat(target, caption) },
             )
             combineOutcomes(imageOutcome, captionOutcome)

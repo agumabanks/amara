@@ -19,6 +19,7 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
     }
 
     var groqApiKey: String by stringPreference("groq_api_key")
+    var groqApiKey2: String by stringPreference("groq_api_key_2")
     var groqEndpoint: String by stringPreference("groq_endpoint", DEFAULT_ENDPOINT)
     var groqModel: String by stringPreference("groq_model", DEFAULT_MODEL)
     var groqVisionModel: String by stringPreference("groq_vision_model")
@@ -38,6 +39,9 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
     var sokoTerminalPin: String by stringPreference("soko_terminal_pin")
     var quietHoursStart: String by stringPreference("quiet_hours_start", "22:00")
     var quietHoursEnd: String by stringPreference("quiet_hours_end", "06:30")
+    var maxRetryCooldownMinutes: Int
+        get() = prefs.getInt("max_retry_cooldown_minutes", 1440).coerceIn(0, 1440)
+        set(value) { prefs.edit().putInt("max_retry_cooldown_minutes", value.coerceIn(0, 1440)).apply() }
 
     var proactiveReadOnlyAudits: Boolean
         get() = prefs.getBoolean("proactive_read_only_audits", false)
@@ -71,6 +75,125 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
         set(value) { prefs.edit().putBoolean("vision_consent", value).apply() }
 
     /**
+     * TikTok test mode: when enabled, posts TikTok ads every 10 minutes from Soko Terminal listings.
+     * Default OFF: only enabled during testing windows.
+     */
+    var tikTokTestMode: Boolean
+        get() = prefs.getBoolean("tiktok_test_mode", false)
+        set(value) { prefs.edit().putBoolean("tiktok_test_mode", value).apply() }
+
+    /**
+     * TikTok posting interval in minutes.
+     * Default 10 minutes (testing). Owner can increase.
+     */
+    var tikTokPostIntervalMinutes: Long
+        get() = prefs.getLong("tiktok_post_interval_minutes", 10L)
+        set(value) { prefs.edit().putLong("tiktok_post_interval_minutes", value.coerceIn(10L, 480L)).apply() }
+
+    /**
+     * Maximum TikTok posts per day.
+     * Default 10. Owner-adjustable.
+     */
+    var tikTokDailyCap: Int
+        get() = prefs.getInt("tiktok_daily_cap", 10)
+        set(value) { prefs.edit().putInt("tiktok_daily_cap", value.coerceIn(1, 144)).apply() }
+
+    var tikTokAlwaysOn: Boolean
+        get() = prefs.getBoolean("tiktok_always_on", false)
+        set(value) { prefs.edit().putBoolean("tiktok_always_on", value).apply() }
+
+    var tikTokSocialEnabled: Boolean
+        get() = prefs.getBoolean("tiktok_social_enabled", false)
+        set(value) { prefs.edit().putBoolean("tiktok_social_enabled", value).apply() }
+
+    var tikTokCommentsEnabled: Boolean
+        get() = prefs.getBoolean("tiktok_comments_enabled", true)
+        set(value) { prefs.edit().putBoolean("tiktok_comments_enabled", value).apply() }
+
+    /**
+     * WhatsApp automation enabled.
+     * Default OFF. The owner explicitly grants standing autopilot authority.
+     */
+    var whatsAppAutomationEnabled: Boolean
+        get() = prefs.getBoolean("whatsapp_automation_enabled", false)
+        set(value) { prefs.edit().putBoolean("whatsapp_automation_enabled", value).apply() }
+
+    var whatsAppInboundEnabled: Boolean
+        get() = prefs.getBoolean("whatsapp_inbound_enabled", true)
+        set(value) { prefs.edit().putBoolean("whatsapp_inbound_enabled", value).apply() }
+
+    var whatsAppFollowUpsEnabled: Boolean
+        get() = prefs.getBoolean("whatsapp_followups_enabled", false)
+        set(value) { prefs.edit().putBoolean("whatsapp_followups_enabled", value).apply() }
+
+    var whatsAppGroupsEnabled: Boolean
+        get() = prefs.getBoolean("whatsapp_groups_enabled", false)
+        set(value) { prefs.edit().putBoolean("whatsapp_groups_enabled", value).apply() }
+
+    /** Inbound customer service may ignore quiet hours; campaigns never do. */
+    var whatsAppAlwaysOn: Boolean
+        get() = prefs.getBoolean("whatsapp_always_on", false)
+        set(value) { prefs.edit().putBoolean("whatsapp_always_on", value).apply() }
+
+    /** Explicit permission to store summaries and learning evidence on cards.sanaa.ug. */
+    var memoryBackupEnabled: Boolean
+        get() = prefs.getBoolean("memory_backup_enabled", false)
+        set(value) { prefs.edit().putBoolean("memory_backup_enabled", value).apply() }
+
+    var memoryAutoRestoreEnabled: Boolean
+        get() = prefs.getBoolean("memory_auto_restore_enabled", true)
+        set(value) { prefs.edit().putBoolean("memory_auto_restore_enabled", value).apply() }
+
+    var lastMemoryBackupAt: Long
+        get() = prefs.getLong("last_memory_backup_at", 0L)
+        set(value) { prefs.edit().putLong("last_memory_backup_at", value).apply() }
+
+    /**
+     * Days before following up on dormant WhatsApp chats.
+     * Default 7 days.
+     */
+    var whatsAppFollowUpDays: Int
+        get() = prefs.getInt("whatsapp_follow_up_days", 7)
+        set(value) { prefs.edit().putInt("whatsapp_follow_up_days", value.coerceIn(1, 30)).apply() }
+
+    /**
+     * Soko auto-sync enabled.
+     * Default true.
+     */
+    var sokoAutoSync: Boolean
+        get() = prefs.getBoolean("soko_auto_sync", true)
+        set(value) { prefs.edit().putBoolean("soko_auto_sync", value).apply() }
+
+    /**
+     * Jiji market scraping enabled.
+     * Default false (owner must opt in).
+     */
+    var jijiScrapingEnabled: Boolean
+        get() = prefs.getBoolean("jiji_scraping_enabled", false)
+        set(value) { prefs.edit().putBoolean("jiji_scraping_enabled", value).apply() }
+
+    /**
+     * Jiji scrape interval in hours.
+     * Default 4 hours.
+     */
+    var jijiScrapeIntervalHours: Int
+        get() = prefs.getInt("jiji_scrape_interval_hours", 4)
+        set(value) { prefs.edit().putInt("jiji_scrape_interval_hours", value.coerceIn(1, 24)).apply() }
+
+    /** Jumia Uganda visual market capture. Default OFF until the owner enables it. */
+    var jumiaIntelligenceEnabled: Boolean
+        get() = prefs.getBoolean("jumia_intelligence_enabled", false)
+        set(value) { prefs.edit().putBoolean("jumia_intelligence_enabled", value).apply() }
+
+    /**
+     * Morning broadcast enabled.
+     * Default true.
+     */
+    var morningBroadcastEnabled: Boolean
+        get() = prefs.getBoolean("morning_broadcast_enabled", true)
+        set(value) { prefs.edit().putBoolean("morning_broadcast_enabled", value).apply() }
+
+    /**
      * Explicit owner policy authorizing durable retention of unmonitored-contact
      * notification events. Default OFF: unmonitored contacts produce only a minimal
      * redacted notification count and nothing else about them is stored.
@@ -84,11 +207,21 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
         get() = prefs.getInt("retention_days", 90)
         set(value) { prefs.edit().putInt("retention_days", value.coerceIn(7, 730)).apply() }
 
+    /**
+     * Maximum screen time per day for the autonomous work loop, in minutes.
+     * Default 90 minutes. Owner-adjustable.
+     */
+    var maxAgentScreenMinutesPerDay: Int
+        get() = prefs.getInt("max_agent_screen_minutes_per_day", 90)
+        set(value) { prefs.edit().putInt("max_agent_screen_minutes_per_day", value.coerceIn(10, 1440)).apply() }
+
     var orderThresholdUgx: Long
         get() = prefs.getLong("order_threshold_ugx", 500_000L)
         set(value) { prefs.edit().putLong("order_threshold_ugx", value).apply() }
 
     fun saveRemoteConfig(json: JSONObject) {
+        json.nonBlank("groq_api_key")?.let { groqApiKey = it }
+        json.nonBlank("groq_api_key_2")?.let { groqApiKey2 = it }
         json.nonBlank("groq_endpoint")?.let { groqEndpoint = it }
         json.nonBlank("groq_model")?.let { groqModel = it }
         json.nonBlank("groq_vision_model")?.let { groqVisionModel = it }
@@ -98,6 +231,8 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
         json.nonBlank("business_name")?.let { businessName = it }
         json.nonBlank("owner_phone")?.let { ownerPhone = it }
         if (json.has("order_threshold_ugx")) orderThresholdUgx = json.optLong("order_threshold_ugx", 500_000L)
+        if (json.has("memory_backup_enabled")) memoryBackupEnabled = json.optBoolean("memory_backup_enabled", false)
+        if (json.has("memory_auto_restore_enabled")) memoryAutoRestoreEnabled = json.optBoolean("memory_auto_restore_enabled", true)
         json.optJSONArray("whatsapp_groups")?.let { whatsAppGroupsJson = it.toString() }
         json.optJSONArray("monitored_whatsapp")?.let { monitoredWhatsAppJson = it.toString() }
     }

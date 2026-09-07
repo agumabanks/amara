@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
@@ -53,6 +54,7 @@ data class WhatsAppChatContext(
     val visibleLines: List<String>,
     val isGroup: Boolean,
     val deliveryState: String?,
+    val alreadyAnswered: Boolean = false,
 ) {
     fun asPrompt(): String = visibleLines.takeLast(60).joinToString("\n")
 }
@@ -154,19 +156,40 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
     private suspend fun sendInCurrentChat(message: String): Boolean {
         val service = AccessibilityAgentService.instance ?: return false
         val root = service.rootInActiveWindow ?: return false
-        val input = findFirst(root) { it.className == "android.widget.EditText" && it.isEditable } ?: return false
+        if (root.packageName?.toString() != "com.whatsapp") return false
+        val input = root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/entry")
+            .singleOrNull { it.isVisibleToUser && it.isEditable } ?: return false
         val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, message) }
         if (!input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return false
         pause(InteractionKind.TYPE_SETTLE)
         val refreshed = service.rootInActiveWindow ?: return false
-        val send = findFirst(refreshed) { node ->
-            val label = "${node.contentDescription} ${node.text}".lowercase()
-            node.isClickable && (label.contains("send") || label.contains("send message"))
-        } ?: return false
+        if (refreshed.packageName?.toString() != "com.whatsapp") return false
+        val composed = refreshed.findAccessibilityNodeInfosByViewId("com.whatsapp:id/entry")
+            .singleOrNull { it.isVisibleToUser && it.isEditable } ?: return false
+        if (co.sanaa.agent.core.ContentHashing.normalize(composed.text?.toString().orEmpty()) !=
+            co.sanaa.agent.core.ContentHashing.normalize(message)) return false
+        // WhatsApp replaces the voice-note control asynchronously after text entry.
+        var send: AccessibilityNodeInfo? = null
+        repeat(12) {
+            val live=service.rootInActiveWindow
+            if(live?.packageName?.toString() != "com.whatsapp") return false
+            val entry=live.findAccessibilityNodeInfosByViewId("com.whatsapp:id/entry")
+                .singleOrNull { it.isVisibleToUser && it.isEditable } ?: return false
+            if(co.sanaa.agent.core.ContentHashing.normalize(entry.text?.toString().orEmpty()) !=
+                co.sanaa.agent.core.ContentHashing.normalize(message)) return false
+            send=live.findAccessibilityNodeInfosByViewId("com.whatsapp:id/send")
+                .singleOrNull { it.isVisibleToUser && it.isEnabled && it.isClickable }
+            if(send != null) return@repeat
+            delay(150)
+        }
+        val trigger=send ?: return false
         val beforeSend = snapshot().signature
-        if (!send.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return false
-        val changed = waitForScreenChange(beforeSend, 2_500)
-        return changed || currentWindowContains(message.take(40))
+        if (!trigger.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+            throw IllegalStateException("WhatsApp send trigger returned no acknowledgement; dispatch is uncertain")
+        waitForScreenChange(beforeSend, 2_500)
+        // The trigger was accepted. Only the target-bound verifier can decide
+        // delivery; a slow bubble must never be recorded as "never dispatched".
+        return true
     }
 
     override fun snapshot(): WhatsAppScreenSnapshot {
@@ -209,6 +232,8 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
     fun packageNameForApp(name: String): String? = when (name.trim().lowercase()) {
         "whatsapp" -> "com.whatsapp"
         "tiktok" -> "com.zhiliaoapp.musically"
+        "jiji", "jiji ug", "jiji.ug" -> "com.olx.ssa.ug"
+        "jumia", "jumia ug", "jumia.ug" -> "com.jumia.android"
         "soko", "soko terminal", "soko seller terminal" -> SOKO_PACKAGE
         "soko buyer", "soko buyer app", "soko24", "soko24 buyer" -> SOKO_BUYER_PACKAGE
         else -> context.packageManager.getInstalledApplications(0)
@@ -474,20 +499,22 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
     override fun observeMessageNodes(content: String): MessageNodeFacts {
         val service = AccessibilityAgentService.instance ?: return MessageNodeFacts(false, false, null)
         val root = service.rootInActiveWindow ?: return MessageNodeFacts(false, false, null)
-        var inEditable = false
-        var inReadOnly = false
-        walkNodes(root) { node ->
-            val nodeText = (node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")
-            if (co.sanaa.agent.core.ContentHashing.normalize(nodeText).contains(co.sanaa.agent.core.ContentHashing.normalize(content))) {
-                val editable = node.isEditable || node.className?.toString()?.endsWith("EditText") == true
-                if (editable) inEditable = true else inReadOnly = true
-            }
+        if (root.packageName?.toString() != "com.whatsapp" || content.isBlank()) return MessageNodeFacts(false,false,null)
+        val wanted=co.sanaa.agent.core.ContentHashing.normalize(content)
+        val draft=root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/entry").any {
+            it.isVisibleToUser && co.sanaa.agent.core.ContentHashing.normalize(it.text?.toString().orEmpty()) == wanted }
+        val rows=root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/conversation_text_row").filter { it.isVisibleToUser }
+        var bubble=false; var marker:String?=null
+        for(row in rows) {
+            val exact=row.findAccessibilityNodeInfosByViewId("com.whatsapp:id/message_text").any {
+                it.isVisibleToUser && !it.isEditable && co.sanaa.agent.core.ContentHashing.normalize(it.text?.toString().orEmpty()) == wanted }
+            if(!exact) continue
+            bubble=true
+            val statuses=row.findAccessibilityNodeInfosByViewId("com.whatsapp:id/status").filter { it.isVisibleToUser }
+            val found=deliveryState(statuses.flatMap(::collectVisibleLabels))
+            if(found != null) marker=found
         }
-        return MessageNodeFacts(
-            inReadOnlyBubble = inReadOnly,
-            onlyInsideEditableField = inEditable && !inReadOnly,
-            deliveryState = messageDeliveryState(content.take(40)),
-        )
+        return MessageNodeFacts(bubble,draft && !bubble,marker)
     }
 
     private fun walkNodes(node: AccessibilityNodeInfo?, depth: Int = 0, visit: (AccessibilityNodeInfo) -> Unit) {
@@ -553,27 +580,81 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
             return failed("protected screen (${screen.kind.name.lowercase()}) requires owner handoff: ${screen.ownerAction}")
         }
         if (!sendInCurrentChat(message)) return failed("type or send message")
-        delay(500)
-        if (!snapshot().contains(message.take(40))) return failed("verify sent message")
-        Log.i(TAG, "WhatsApp contact send action completed")
+        Log.i(TAG, "WhatsApp send trigger accepted; awaiting target-bound delivery verification")
         return true
     }
 
-    override suspend fun openWhatsAppTarget(contact: String): Boolean {
-        if (!launchPackage("com.whatsapp")) return false
-        delay(1_200)
-        if (!openWhatsAppSearch()) return failed("open Search")
-        delay(400)
-        if (!setFirstEditable(contact)) return failed("enter contact")
-        delay(900)
-        if (!clickSearchResult(contact)) return failed("open contact")
-        delay(700)
-        val screen = snapshot()
-        return screen.isWhatsApp && screen.contains(contact) && hasEditableField()
+    internal suspend fun openWhatsAppOrigin(identity: String, label: String, inbound: String): Boolean {
+        if(!co.sanaa.agent.modules.WhatsAppConversationRoutes.open(identity)) return false
+        repeat(30) {
+            if(isVerifiedWhatsAppOrigin(label,inbound)) return true
+            delay(200)
+        }
+        return false
     }
 
-    suspend fun readWhatsAppConversation(target: String, maxScrolls: Int = 3): WhatsAppChatContext? {
+    internal fun isVerifiedWhatsAppOrigin(label: String, inbound: String): Boolean {
+        if(!isExactWhatsAppConversation(label) || inbound.isBlank()) return false
+        val root=AccessibilityAgentService.instance?.rootInActiveWindow ?: return false
+        val wanted=co.sanaa.agent.core.ContentHashing.normalize(inbound)
+        return root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/message_text").any {
+            it.isVisibleToUser && co.sanaa.agent.core.ContentHashing.normalize(it.text?.toString().orEmpty())==wanted
+        }
+    }
+
+    override suspend fun openWhatsAppTarget(contact: String): Boolean {
+        lastWhatsAppNavigationFailure = ""
+        if (contact.isBlank()) return false
+        // Reading and sending commonly happen in the same chat. Do not relaunch
+        // WhatsApp and lose its current conversation before testing this fast path.
+        if (isExactWhatsAppConversation(contact)) return true
+        if (!launchPackage("com.whatsapp")) return false
+        if (waitForForegroundPackage("com.whatsapp") == null) return failed("wait for WhatsApp foreground")
+        if (isExactWhatsAppConversation(contact)) return true
+        if (!openWhatsAppSearch()) return failed("open Search")
+        for (attempt in 0 until 10) {
+            if (hasEditableField()) break
+            delay(250)
+        }
+        if (!setFirstEditable(contact)) return failed("enter contact")
+        var opened = false
+        for (attempt in 0 until 20) {
+            if (isExactWhatsAppConversation(contact)) return true
+            if (clickSearchResult(contact)) { opened = true; break }
+            delay(250)
+        }
+        if (!opened) return failed("open exact contact result")
+        repeat(12) {
+            if (isExactWhatsAppConversation(contact)) return true
+            delay(250)
+        }
+        return failed("verify target and conversation composer")
+    }
+
+    internal fun isExactWhatsAppConversation(contact: String): Boolean {
+        val root = AccessibilityAgentService.instance?.rootInActiveWindow ?: return false
+        if (root.packageName?.toString() != "com.whatsapp") return false
+        val composer = root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/entry")
+            .any { it.isVisibleToUser && it.isEditable }
+        val title = root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/conversation_contact_name")
+            .any { it.isVisibleToUser && WhatsAppTargetMatching.matches(it.text?.toString().orEmpty(), contact) }
+        return composer && title
+    }
+
+    suspend fun readWhatsAppConversation(
+        target: String,
+        maxScrolls: Int = 3,
+        inboundMessage: String? = null,
+    ): WhatsAppChatContext? {
         if (!openWhatsAppTarget(target)) return null
+        // Notification delivery and screen work are asynchronous. If the owner (or
+        // another Amara run) has already answered this exact inbound message, mark
+        // the work complete instead of creating a second, stale reply.
+        val alreadyAnswered = inboundMessage?.takeIf(String::isNotBlank)?.let { incoming ->
+            AccessibilityAgentService.instance?.rootInActiveWindow?.let { root ->
+                hasOutgoingReplyAfter(root, incoming)
+            }
+        } ?: false
         val pages = mutableListOf<List<String>>()
         repeat(maxScrolls.coerceIn(0, 8) + 1) { pass ->
             pages += snapshot().visibleText
@@ -586,8 +667,32 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
         val lines = all.filterNot(::isWhatsAppChrome)
         val joined = all.joinToString(" ").lowercase()
         val group = joined.contains("participants") || joined.contains("group info")
-        return WhatsAppChatContext(target, lines, group, deliveryState(all))
+        return WhatsAppChatContext(target, lines, group, deliveryState(all), alreadyAnswered)
     }
+
+    private fun hasOutgoingReplyAfter(root: AccessibilityNodeInfo, incoming: String): Boolean {
+        val wanted = normalizeWhatsAppMessage(incoming)
+        if (wanted.isBlank()) return false
+        val rows = root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/conversation_text_row")
+            .filter { it.isVisibleToUser }
+            .sortedBy { row -> Rect().also(row::getBoundsInScreen).top }
+        val incomingIndex = rows.indexOfLast { row ->
+            row.findAccessibilityNodeInfosByViewId("com.whatsapp:id/message_text").any { node ->
+                val observed = normalizeWhatsAppMessage(node.text?.toString().orEmpty())
+                observed == wanted || (wanted.length >= 16 && observed.contains(wanted))
+            }
+        }
+        if (incomingIndex < 0) return false
+        return rows.drop(incomingIndex + 1).any { row ->
+            row.findAccessibilityNodeInfosByViewId("com.whatsapp:id/status").any {
+                it.isVisibleToUser && deliveryState(collectVisibleLabels(it)) in setOf("sent","delivered","read")
+            }
+        }
+    }
+
+    private fun normalizeWhatsAppMessage(value: String): String = value
+        .lowercase()
+        .filter(Char::isLetterOrDigit)
 
     suspend fun readWhatsAppGroupParticipants(group: String, maxScrolls: Int = 8): List<String> {
         if (!openWhatsAppTarget(group)) return emptyList()
@@ -656,9 +761,20 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
         return null
     }
 
+    var lastWhatsAppPhotoBlocker: String? = null
+        private set
+
     @RequiresTransaction(reason = "attachment dispatch")
     private suspend fun sendWhatsAppAttachment(target: String, uri: Uri, mimeType: String, caption: String = ""): Boolean {
-        if (!isAvailable()) return false
+        lastWhatsAppPhotoBlocker = null
+        suspend fun stopped(stage: String): Boolean {
+            lastWhatsAppPhotoBlocker = stage
+            co.sanaa.agent.core.EvaluationJournal(context).record("group_photo_blocked", fields = org.json.JSONObject().put("stage",stage))
+            Log.w(TAG, "WhatsApp photo preparation stopped at $stage")
+            captureScreenshot("whatsapp_photo_$stage")
+            return false
+        }
+        if (!isAvailable()) return stopped("accessibility")
         val started = runCatching {
             context.startActivity(Intent(Intent.ACTION_SEND).apply {
                 type = mimeType
@@ -669,45 +785,162 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
             })
             true
         }.getOrDefault(false)
-        if (!started) return false
-        delay(1_200)
-        if (!setFirstEditable(target)) clickLabel("Search") && setFirstEditable(target)
-        delay(700)
-        if (!clickSearchResult(target)) return false
-        delay(500)
-        if (!clickLabel("Next", "Send")) return false
-        delay(900)
-        var screen = snapshot()
-        if (screen.contains(target) && ((caption.isNotBlank() && screen.contains(caption)) || (caption.isBlank() && screen.contains("Enlarge photo")))) return true
-        if (caption.isNotBlank()) setFirstEditable(caption)
-        if (!clickLabel("Send")) return false
-        delay(900)
-        screen = snapshot()
-        return screen.contains(target) && ((caption.isNotBlank() && screen.contains(caption)) || screen.contains("Enlarge photo"))
+        if (!started) return stopped("launch")
+        if (waitForForegroundPackage("com.whatsapp", 10_000) == null) return stopped("foreground")
+        var searchReady = false
+        repeat(16) {
+            if (!searchReady) {
+                searchReady = hasEditableField() || clickExactLabel("Search")
+                if (!searchReady) delay(250)
+            }
+        }
+        if (!searchReady || !setFirstEditable(target)) return stopped("picker_search")
+        var selected = false
+        repeat(16) {
+            if (!selected) { selected = clickSearchResult(target); if (!selected) delay(250) }
+        }
+        if (!selected) {
+            val root = AccessibilityAgentService.instance?.rootInActiveWindow
+            val noResults = root?.packageName?.toString()=="com.whatsapp" && findFirst(root) {
+                it.isVisibleToUser && it.text?.toString()?.startsWith("No results found",true)==true
+            } != null
+            return stopped(if(noResults) "recipient_unavailable" else "recipient_not_unique")
+        }
+        delay(400)
+        // Some WhatsApp builds dispatch directly from the picker when EXTRA_TEXT
+        // is supplied. Once Send is accepted, never report "not dispatched" or
+        // click another Send. The transaction verifier determines the outcome.
+        if (clickExactLabel("Send")) return true
+        if (!clickExactLabel("Next")) return stopped("picker_next")
+        var captionField: AccessibilityNodeInfo? = null
+        repeat(20) {
+            if (captionField == null) {
+                val root = AccessibilityAgentService.instance?.rootInActiveWindow
+                if (root?.packageName?.toString() == "com.whatsapp") captionField = findFirst(root) {
+                    it.isEditable && it.isVisibleToUser &&
+                        (it.viewIdResourceName.orEmpty().contains("caption") ||
+                         it.hintText?.toString().orEmpty().contains("caption", true) ||
+                         it.contentDescription?.toString().orEmpty().contains("caption", true) ||
+                         it.text?.toString().orEmpty().contains("caption", true))
+                }
+                if (captionField == null) delay(250)
+            }
+        }
+        val field = captionField ?: return stopped("caption_field")
+        if (caption.isNotBlank() && field.text?.toString() != caption) {
+            field.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            if (!field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,
+                Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, caption) }))
+                return stopped("caption_write")
+        }
+        delay(400)
+        val preview = AccessibilityAgentService.instance?.rootInActiveWindow ?: return stopped("preview_missing")
+        if (preview.packageName?.toString() != "com.whatsapp") return stopped("preview_foreground")
+        val captionPresent = findFirst(preview) { it.isEditable && it.isVisibleToUser && it.text?.toString() == caption }
+        if (caption.isNotBlank() && captionPresent == null) return stopped("caption_readback")
+        // Only the final preview Send dispatches. Delivery is established separately.
+        if (clickExactLabel("Send")) return true
+        val buttons = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(preview, buttons) { it.isVisibleToUser &&
+            it.viewIdResourceName == "com.whatsapp:id/send" &&
+            it.contentDescription?.toString()?.startsWith("Send", true) == true }
+        val button = buttons.singleOrNull() ?: return stopped("preview_send")
+        val bounds = Rect().also(button::getBoundsInScreen)
+        val window = Rect().also(preview::getBoundsInScreen)
+        if (bounds.isEmpty || !window.contains(bounds)) return stopped("preview_send_bounds")
+        return tapByPosition(bounds.centerX(), bounds.centerY())
+    }
+
+    suspend fun verifyCaptionedPhoto(target: String, caption: String): co.sanaa.agent.core.VerificationEvidence {
+        if (!openWhatsAppTarget(target)) return co.sanaa.agent.core.VerificationEvidence.impossible("Exact photo destination unavailable")
+        val wanted = co.sanaa.agent.core.ContentHashing.normalize(caption)
+        if (wanted.isBlank()) return co.sanaa.agent.core.VerificationEvidence.impossible("Empty photo caption")
+        var photoSeen = false
+        var completeCaptionSeen = false
+        var delivery: String? = null
+        repeat(12) {
+            val root = AccessibilityAgentService.instance?.rootInActiveWindow
+            if (root?.packageName?.toString() == "com.whatsapp") {
+                val captions = root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/caption")
+                for (node in captions) {
+                    val observed = co.sanaa.agent.core.ContentHashing.normalize(node.text?.toString().orEmpty())
+                    val truncated = observed.replace(Regex("(?:\\.\\.\\.|…)\\s*Read more\\s*$", RegexOption.IGNORE_CASE), "").trim()
+                    val complete = observed == wanted
+                    if (!complete && !(truncated != observed && truncated.length >= 80 && wanted.startsWith(truncated))) continue
+                    var row = node.parent
+                    while (row != null && row.viewIdResourceName != "com.whatsapp:id/main_layout") {
+                        if (row.className?.toString() == "android.widget.ListView") { row = null; break }
+                        row = row.parent
+                    }
+                    val container = row ?: continue
+                    completeCaptionSeen = completeCaptionSeen || complete
+                    val media = findFirst(container) { it.viewIdResourceName in setOf(
+                        "com.whatsapp:id/image", "com.whatsapp:id/thumb", "com.whatsapp:id/media_grid") &&
+                        it.contentDescription?.toString().orEmpty().contains("photo", true) }
+                    photoSeen = photoSeen || media != null
+                    val status = container.findAccessibilityNodeInfosByViewId("com.whatsapp:id/status")
+                        .firstOrNull { it.isVisibleToUser }?.contentDescription?.toString()?.lowercase()
+                    if (status in setOf("sent", "delivered", "read")) delivery = status
+                    if (photoSeen && completeCaptionSeen && delivery != null)
+                        return co.sanaa.agent.core.VerificationEvidence(true, 0.9, "com.whatsapp", delivery!!, System.currentTimeMillis())
+                    if (!complete) {
+                        val expand = findFirst(container) { it.isVisibleToUser && it.contentDescription?.toString().equals("Read more", true) }
+                        if (expand != null) {
+                            val bounds = Rect().also(expand::getBoundsInScreen)
+                            if (!bounds.isEmpty) { tapByPosition(bounds.centerX(), bounds.centerY()); delay(300) }
+                        }
+                    }
+                }
+                // A long caption and its image/status may not fit in one viewport.
+                // Accumulate only observations matched to this exact caption row.
+                val list = root.findAccessibilityNodeInfosByViewId("android:id/list").firstOrNull { it.isScrollable }
+                list?.performAction(if (photoSeen) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+            }
+            delay(500)
+        }
+        return co.sanaa.agent.core.VerificationEvidence.impossible("Photo, complete caption and delivery marker were not proven in the same outgoing row")
     }
 
     private suspend fun openWhatsAppSearch(): Boolean {
         if (!ensureWhatsAppHome()) return false
-        val root = AccessibilityAgentService.instance?.rootInActiveWindow ?: return false
-        val search = root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/search_bar_inner_layout").firstOrNull()
-        if (search?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
-        return clickExactLabel("Ask Meta AI or Search", "Search")
+        // Prefer the contact picker: global search duplicates the same identity
+        // under Chats and Contacts and may retain an earlier Meta AI query.
+        repeat(12) {
+            if (snapshot().packageName != "com.whatsapp") return false
+            if (clickExactLabel("New chat")) {
+                repeat(20) {
+                    delay(250)
+                    if (snapshot().packageName != "com.whatsapp") return false
+                    if (clickExactLabel("Search")) return true
+                }
+                return false
+            }
+            delay(250)
+        }
+        return false
     }
 
     private suspend fun ensureWhatsAppHome(): Boolean {
         val service = AccessibilityAgentService.instance ?: return false
-        repeat(7) {
+        repeat(16) {
             dismissCommonWhatsAppObstruction()
-            val screen = snapshot()
-            if (screen.isWhatsApp && screen.contains("Chats") && (screen.contains("Updates") || screen.contains("Calls"))) return true
-            service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-            delay(500)
+            val root = service.rootInActiveWindow
+            if (root?.packageName?.toString() != "com.whatsapp") {
+                launchPackage("com.whatsapp")
+            } else {
+                val home = root.findAccessibilityNodeInfosByViewId("com.whatsapp:id/fab")
+                    .any { it.isVisibleToUser && it.contentDescription?.toString() == "New chat" }
+                if (home) return true
+                service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            }
+            delay(400)
         }
         return false
     }
 
     internal suspend fun recoverSokoHome(pin: String): Boolean {
         val service = AccessibilityAgentService.instance ?: return false
+        var submittedPin = false
         repeat(20) {
             val screen = snapshot()
             if (screen.packageName != SOKO_PACKAGE) {
@@ -716,7 +949,11 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
                 return@repeat
             }
             if (screen.contains("Staff Login")) {
+                // Remaining on login is not evidence of a bad credential. Never
+                // turn a slow response or selector mismatch into repeated guesses.
+                if (pin.isBlank() || submittedPin) return false
                 if (!setFirstEditable(pin)) return false
+                submittedPin = true
                 if (!clickAndLearn(SOKO_PACKAGE, "staff_sign_in", "Sign in")) return false
                 delay(1_500)
                 return@repeat
@@ -742,7 +979,7 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
             screen.contains("Enter your phone number") ->
                 "Soko Terminal is signed out at the account phone-number screen. I need the owner to sign in or explicitly provide the account phone and approve any OTP step; the saved staff PIN cannot unlock this screen."
             screen.contains("Staff Login") ->
-                "Soko Terminal is at Staff Login, but the saved PIN was not accepted. Check the stored Terminal PIN."
+                "Soko Terminal remains at Staff Login; sign-in could not be verified. This does not establish that the saved PIN is incorrect. Owner sign-in or a supervised login-screen check is required."
             !isAvailable() ->
                 "Phone Accessibility is not enabled or bound, so I cannot inspect Soko Terminal."
             else -> "The Soko Point of Sale screen could not be recovered."
@@ -810,18 +1047,32 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
 
     private fun clickSearchResult(label: String): Boolean {
         val root = AccessibilityAgentService.instance?.rootInActiveWindow ?: return false
-        return root.findAccessibilityNodeInfosByText(label)
-            .filterNot { it.className == "android.widget.EditText" }
-            .sortedByDescending { it.text?.toString()?.trim()?.equals(label.trim(), true) == true }
-            .any { node ->
-                var clickable: AccessibilityNodeInfo? = node
-                while (clickable != null && !clickable.isClickable) clickable = clickable.parent
-                if (clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) true
-                else {
-                    val bounds = Rect().also(node::getBoundsInScreen)
-                    !bounds.isEmpty && tapByPosition(bounds.centerX(), bounds.centerY())
-                }
-            }
+        // Android's literal substring search misses phone numbers formatted with spaces.
+        // Compare all visible labels using the same full-identity matcher as the header.
+        if (root.packageName?.toString() != "com.whatsapp") return false
+        val matches = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, matches) { it.isVisibleToUser && it.className != "android.widget.EditText" &&
+            WhatsAppTargetMatching.matches(it.text?.toString().orEmpty(), label) }
+        val nameIds=setOf("com.whatsapp:id/contactpicker_row_name","com.whatsapp:id/conversations_row_contact_name")
+        val identified=matches.filter { it.viewIdResourceName in nameIds }
+        if(identified.isNotEmpty()) { matches.clear();matches.addAll(identified) }
+        val rows = matches.mapNotNull { node ->
+            var clickable: AccessibilityNodeInfo? = node
+            while (clickable != null && !clickable.isClickable) clickable = clickable.parent
+            clickable
+        }.distinct()
+        // Multiple labels on one clickable row are one result; separate rows remain ambiguous.
+        if (rows.size > 1) return false
+        if (rows.singleOrNull()?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
+        // Current WhatsApp's media picker exposes non-clickable RadioButton rows.
+        // Tap only a unique exact-name picker label, within the foreground window.
+        if (root.packageName?.toString() != "com.whatsapp") return false
+        val pickerName = matches.filter { it.viewIdResourceName in setOf(
+            "com.whatsapp:id/contactpicker_row_name", "com.whatsapp:id/conversations_row_contact_name") }.singleOrNull() ?: return false
+        val bounds = Rect().also(pickerName::getBoundsInScreen)
+        val window = Rect().also(root::getBoundsInScreen)
+        if (bounds.isEmpty || !window.contains(bounds)) return false
+        return tapByPosition(bounds.centerX(), bounds.centerY())
     }
 
     @RequiresTransaction(reason = "direct listing write")
@@ -980,28 +1231,197 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
         }
     }
 
-    @RequiresTransaction(reason = "public TikTok publish or draft creation")
-    private suspend fun postTikTok(imageUrl: String, caption: String, publish: Boolean = false): Boolean {
-        if (!isAvailable() || imageUrl.isBlank()) return false
-        val directory = File(context.cacheDir, "agent-creatives").apply { mkdirs() }
-        val image = File(directory, "broadcast-${System.currentTimeMillis()}.jpg")
+    private fun normalizedPhotoBytes(imageUrl: String): ByteArray {
         val response = OkHttpClient().newCall(Request.Builder().url(imageUrl).build()).execute()
-        response.use { download ->
-            if (!download.isSuccessful) return false
-            val body = download.body ?: return false
-            image.outputStream().use { body.byteStream().copyTo(it) }
+        return response.use { download ->
+            check(download.isSuccessful) { "TikTok image download HTTP ${download.code}" }
+            val body = checkNotNull(download.body)
+            check(body.contentLength() <= 15L * 1024 * 1024) { "TikTok image too large" }
+            check(!body.source().request(15L * 1024 * 1024 + 1)) { "TikTok image too large" }
+            val encoded = body.bytes()
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(encoded, 0, encoded.size, bounds)
+            check(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 20_000_000) { "Invalid or oversized TikTok image dimensions" }
+            val bitmap = checkNotNull(BitmapFactory.decodeByteArray(encoded, 0, encoded.size))
+            try {
+                java.io.ByteArrayOutputStream().use { output ->
+                    check(bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output))
+                    output.toByteArray()
+                }
+            } finally { bitmap.recycle() }
+        }
+    }
+
+    fun visibleJumiaOffers(): List<co.sanaa.agent.core.market.JumiaOfferParser.Offer> {
+        val root = AccessibilityAgentService.instance?.rootInActiveWindow ?: return emptyList()
+        if (root.packageName?.toString() != "com.jumia.android") return emptyList()
+        val prices = root.findAccessibilityNodeInfosByViewId("com.jumia.android:id/catalog_carousel_product_price")
+        return prices.filter { it.isVisibleToUser }.mapNotNull { price ->
+            var card = price.parent
+            var offer: co.sanaa.agent.core.market.JumiaOfferParser.Offer? = null
+            for (level in 0 until 5) {
+                val container = card ?: break
+                val names = container.findAccessibilityNodeInfosByViewId("com.jumia.android:id/catalog_carousel_product_name")
+                    .filter { it.isVisibleToUser }
+                val amounts = container.findAccessibilityNodeInfosByViewId("com.jumia.android:id/catalog_carousel_product_price")
+                    .filter { it.isVisibleToUser }
+                if (names.size == 1 && amounts.size == 1) {
+                    offer = co.sanaa.agent.core.market.JumiaOfferParser.card(listOf(
+                        names.single().text?.toString().orEmpty(), amounts.single().text?.toString().orEmpty()))
+                    break
+                }
+                if (names.size > 1 || amounts.size > 1) break
+                card = container.parent
+            }
+            offer
+        }.distinctBy { it.title }
+    }
+
+    suspend fun scrollPublicMarketPage(expectedPackage: String): Boolean {
+        if (expectedPackage !in setOf("com.jumia.android", "com.olx.ssa.ug")) return false
+        val service = AccessibilityAgentService.instance ?: return false
+        val root = service.rootInActiveWindow ?: return false
+        if (root.packageName?.toString() != expectedPackage) return false
+        val vertical = mutableListOf<AccessibilityNodeInfo>()
+        collectNodes(root, vertical) { node ->
+            val rect = Rect().also(node::getBoundsInScreen)
+            node.isVisibleToUser && node.isScrollable && rect.height() > rect.width()
+        }
+        if (vertical.maxByOrNull { Rect().also(it::getBoundsInScreen).height() }
+                ?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) == true) { delay(900); return true }
+        // Canvas storefronts expose no scrollable Accessibility node. Swipe only
+        // the verified public market surface, clear of bottom tabs and top search.
+        val bounds = Rect().also(root::getBoundsInScreen)
+        if (bounds.width() <= 0 || bounds.height() <= 0) return false
+        val x = bounds.exactCenterX()
+        val path = android.graphics.Path().apply {
+            moveTo(x, bounds.top + bounds.height() * 0.76f)
+            lineTo(x, bounds.top + bounds.height() * 0.30f)
+        }
+        val accepted = service.dispatchGesture(android.accessibilityservice.GestureDescription.Builder()
+            .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 500)).build(), null, null)
+        if (accepted) delay(1000)
+        return accepted
+    }
+
+    fun prepareBoundWhatsAppPhoto(imageUrl: String, bindingKey: String): Pair<Uri, String> {
+        val file = BoundTikTokMedia.prepare(File(context.filesDir, "whatsapp-bound-media"), bindingKey) { normalizedPhotoBytes(imageUrl) }
+        return FileProvider.getUriForFile(context, "${context.packageName}.files", file) to BoundTikTokMedia.sha256(file.readBytes())
+    }
+
+    @RequiresTransaction(reason = "public TikTok publish or draft creation")
+    private suspend fun postTikTok(imageUrl: String, caption: String, publish: Boolean = false, mediaBindingKey: String = ""): Boolean {
+        lastTikTokPreparationFailure = ""
+        if (!isAvailable() || imageUrl.isBlank()) return tikTokPreparationFailed("prepare_step_3")
+        if (mediaBindingKey.isBlank()) return tikTokPreparationFailed("prepare_step_4")
+        val directory = File(context.filesDir, "tiktok-bound-media")
+        val image = BoundTikTokMedia.prepare(directory, mediaBindingKey) {
+            normalizedPhotoBytes(imageUrl)
         }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", image)
+        context.grantUriPermission(
+            "com.zhiliaoapp.musically",
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION,
+        )
         val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "image/*"; putExtra(Intent.EXTRA_STREAM, uri); putExtra(Intent.EXTRA_TEXT, caption)
+            type = "image/jpeg"; putExtra(Intent.EXTRA_STREAM, uri); putExtra(Intent.EXTRA_TEXT, caption)
             setPackage("com.zhiliaoapp.musically"); addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        if (runCatching { context.startActivity(intent); true }.getOrDefault(false).not()) return false
-        delay(2_000)
-        clickLabel("Next")
-        delay(1_200)
-        setFirstEditable(caption)
+        if (runCatching { context.startActivity(intent); true }.getOrDefault(false).not()) return tikTokPreparationFailed("prepare_step_36")
+        if (waitForForegroundPackage("com.zhiliaoapp.musically", 10_000) == null) return tikTokPreparationFailed("share_foreground")
+        // Wait for asynchronous share import, then navigate each observed stage once.
+        var chosePhoto = false
+        var advanced = false
+        var composerReady = false
+        for (poll in 0 until 60) {
+            val screen = snapshot()
+            if (screen.packageName != "com.zhiliaoapp.musically") return tikTokPreparationFailed("composer_foreground")
+            if (screen.visibleText.any { it.trim() == "Post" } && hasEditableField()) {
+                composerReady = true
+                break
+            }
+            if (!chosePhoto && screen.contains("Share on TikTok")) {
+                if (clickExactLabel("Photo")) chosePhoto = true
+            } else if (!advanced && screen.visibleText.any { it.trim() == "Next" }) {
+                if (clickExactLabel("Next")) advanced = true
+            }
+            delay(500)
+        }
+        if (!composerReady) return tikTokPreparationFailed("composer_timeout")
+        if (caption.isNotBlank()) {
+            val root = AccessibilityAgentService.instance?.rootInActiveWindow ?: return tikTokPreparationFailed("prepare_step_53")
+            if (root.packageName?.toString() != "com.zhiliaoapp.musically") return tikTokPreparationFailed("prepare_step_54")
+            val fields = mutableListOf<AccessibilityNodeInfo>()
+            collectEditable(root, fields)
+            val input = fields.filter { field ->
+                field.isVisibleToUser && TikTokComposerChecks.isCaptionField(
+                    field.text?.toString().orEmpty(),
+                    if (Build.VERSION.SDK_INT >= 26) field.hintText?.toString().orEmpty() else "",
+                    field.contentDescription?.toString().orEmpty(), caption)
+            }.singleOrNull() ?: return tikTokPreparationFailed("description_field_missing_or_ambiguous")
+            val hint = if (Build.VERSION.SDK_INT >= 26) input.hintText?.toString().orEmpty() else ""
+            if (!TikTokComposerChecks.isCaptionField(input.text?.toString().orEmpty(), hint,
+                    input.contentDescription?.toString().orEmpty(), caption)) return tikTokPreparationFailed("prepare_step_60")
+            if (!input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, caption)
+            })) return tikTokPreparationFailed("prepare_step_63")
+            delay(500)
+            // Never publish an orphaned product photo: the caption must be visibly
+            // present on TikTok's editor before the consequential Post tap.
+            val verifiedRoot = AccessibilityAgentService.instance?.rootInActiveWindow ?: return tikTokPreparationFailed("prepare_step_67")
+            if (verifiedRoot.packageName?.toString() != "com.zhiliaoapp.musically") return tikTokPreparationFailed("prepare_step_68")
+            if (findFirst(verifiedRoot) { it.isVisibleToUser && it.isEditable && it.text?.toString() == caption } == null) return tikTokPreparationFailed("prepare_step_69")
+        }
+        // Local evidence for reconciliation, NOT an assertion that media pixels
+        // match. No screenshot is uploaded to a model or backend here.
+        val evidence = captureScreenshot("tiktok_composer_${image.nameWithoutExtension.take(12)}")
+        Log.i(TAG, "TikTok prepared media_sha256=${image.nameWithoutExtension}; composer_evidence=${evidence.path ?: "unavailable"}")
+        if (snapshot().packageName != "com.zhiliaoapp.musically") return tikTokPreparationFailed("prepare_step_75")
         return if (publish) clickExactLabel("Post") else clickLabel("Drafts", "Save draft")
+    }
+
+
+    @Volatile var lastTikTokPreparationFailure: String = ""
+        private set
+
+    private fun tikTokPreparationFailed(stage: String): Boolean {
+        lastTikTokPreparationFailure = stage
+        Log.w(TAG, "TikTok preparation stopped at $stage; package=${snapshot().packageName}")
+        return false
+    }
+
+    /** Opens the newest post from the signed-in TikTok profile without relying on
+     * screen coordinates. Used only for target-bound post verification. */
+    suspend fun openLatestTikTokPost(): Boolean {
+        if (!isAvailable()) return false
+        val current = snapshot()
+        if (current.packageName != "com.zhiliaoapp.musically") return false
+        if (!clickExactLabel("Profile")) return false
+        // Profile thumbnails can load later than the navigation animation. Poll
+        // the known grid node rather than guessing coordinates or publishing again.
+        repeat(20) {
+            delay(400)
+            if (snapshot().packageName != "com.zhiliaoapp.musically") return false
+            val root = AccessibilityAgentService.instance?.rootInActiveWindow ?: return@repeat
+            val tiles = mutableListOf<AccessibilityNodeInfo>()
+            collectNodes(root, tiles) { node ->
+                node.isVisibleToUser && node.isClickable &&
+                    node.viewIdResourceName in setOf("com.zhiliaoapp.musically:id/eyc", "com.zhiliaoapp.musically:id/exx") &&
+                    node.findAccessibilityNodeInfosByViewId("com.zhiliaoapp.musically:id/tv_play_count").isNotEmpty() &&
+                    node.findAccessibilityNodeInfosByViewId("com.zhiliaoapp.musically:id/tv_draft").isEmpty()
+            }
+            val newest = tiles.sortedWith(compareBy<AccessibilityNodeInfo> { Rect().also(it::getBoundsInScreen).top }
+                .thenBy { Rect().also(it::getBoundsInScreen).left }).firstOrNull() ?: return@repeat
+            if (!newest.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return false
+            delay(1_200)
+            // Captions are collapsed in the post view; expand only its description.
+            if (snapshot().packageName != "com.zhiliaoapp.musically") return false
+            clickViewId("com.zhiliaoapp.musically:id/desc")
+            delay(500)
+            return snapshot().packageName == "com.zhiliaoapp.musically"
+        }
+        return false
     }
 
     fun clickLabel(vararg labels: String): Boolean {
@@ -1034,6 +1454,16 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
             if (clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) return true
         }
         return false
+    }
+
+    /** Read navigation must scroll a clipped category row fully into view first. */
+    fun clickFullyVisibleLabel(label: String): Boolean {
+        val root = AccessibilityAgentService.instance?.rootInActiveWindow ?: return false
+        val window = Rect().also(root::getBoundsInScreen)
+        val node = findFirst(root) { it.isVisibleToUser && it.text?.toString()?.trim().equals(label, true) } ?: return false
+        val bounds = Rect().also(node::getBoundsInScreen)
+        if (bounds.height() < 24 || bounds.bottom >= window.bottom - 40 || bounds.top < window.top) return false
+        return clickExactLabel(label)
     }
 
     fun clickViewId(viewId: String): Boolean {
@@ -1069,9 +1499,19 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
     }.onFailure { Log.e(TAG, "Could not launch $packageName", it) }.getOrDefault(false)
 
     private fun failed(step: String): Boolean {
+        lastWhatsAppNavigationFailure = when {
+            step.startsWith("open exact contact") -> "search_result: no single exact contact result"
+            step.startsWith("verify target") -> "conversation_header: target/composer could not be verified"
+            step == "open Search" -> "search_surface: search control unavailable after bounded recovery"
+            step == "enter contact" -> "search_input: editable search field unavailable"
+            else -> "navigation: " + co.sanaa.agent.core.Redactor.redact(step).take(160)
+        }
         Log.w(TAG, "WhatsApp contact send failed at: $step")
         return false
     }
+
+    @Volatile var lastWhatsAppNavigationFailure: String = ""
+        private set
 
     internal suspend fun pause(kind: InteractionKind) = delay(HumanPacing.delayMillis(kind))
 
@@ -1305,7 +1745,7 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
         suspend fun sendInCurrentChat(message: String): Boolean
         suspend fun postWhatsAppTextStatus(message: String): Boolean
         suspend fun postWhatsAppMediaStatus(uri: Uri, mimeType: String, caption: String): Boolean
-        suspend fun postTikTok(imageUrl: String, caption: String, publish: Boolean): Boolean
+        suspend fun postTikTok(imageUrl: String, caption: String, publish: Boolean, mediaBindingKey: String = ""): Boolean
         suspend fun updateSokoListing(currentTitle: String, newTitle: String, newDescription: String): Boolean
         suspend fun saveEditForm(): Boolean
         fun setFirstEditable(text: String): Boolean
@@ -1329,8 +1769,8 @@ class AccessibilityActions(private val context: Context, private val memory: Ama
             this@AccessibilityActions.postWhatsAppTextStatus(message)
         override suspend fun postWhatsAppMediaStatus(uri: Uri, mimeType: String, caption: String): Boolean =
             this@AccessibilityActions.postWhatsAppMediaStatus(uri, mimeType, caption)
-        override suspend fun postTikTok(imageUrl: String, caption: String, publish: Boolean): Boolean =
-            this@AccessibilityActions.postTikTok(imageUrl, caption, publish)
+        override suspend fun postTikTok(imageUrl: String, caption: String, publish: Boolean, mediaBindingKey: String): Boolean =
+            this@AccessibilityActions.postTikTok(imageUrl, caption, publish, mediaBindingKey)
         override suspend fun updateSokoListing(currentTitle: String, newTitle: String, newDescription: String): Boolean =
             this@AccessibilityActions.updateSokoListing(currentTitle, newTitle, newDescription)
         override suspend fun saveEditForm(): Boolean = this@AccessibilityActions.saveEditForm()

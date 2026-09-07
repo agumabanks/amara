@@ -72,6 +72,7 @@ class MainActivity : FlutterActivity() {
             withContext(Dispatchers.Main) {
                 ensureAgentRunning()
                 handleTestCommand(intent)
+                handleTikTokTest(intent)
             }
         }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
@@ -162,8 +163,10 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "setupComplete" -> {
-                    val granted = permissions.statusMap().values.all { it }
-                    result.success(getSharedPreferences("agent_ui", MODE_PRIVATE).getBoolean("setup_complete", false) || (granted && config.groqApiKey.isNotBlank()))
+                    // Only the explicit Start Amara action completes onboarding.
+                    // Backend-managed model credentials are not a setup gate, and
+                    // pre-granted permissions must not skip the service start path.
+                    result.success(getSharedPreferences("agent_ui", MODE_PRIVATE).getBoolean("setup_complete", false))
                 }
                 "saveGroqKey" -> {
                     val key = call.argument<String>("key").orEmpty().trim()
@@ -184,6 +187,7 @@ class MainActivity : FlutterActivity() {
                             AgentRuntime.SOKO_TERMINAL_PACKAGE,
                             "terminal_login",
                             supplied.toCharArray(),
+                            ownerConfirmedReset = true,
                         )
                         withContext(Dispatchers.Main) { when (outcome) {
                             is co.sanaa.agent.core.CredentialResult.Stored,
@@ -294,6 +298,42 @@ class MainActivity : FlutterActivity() {
                             "id" to task.id, "instruction" to task.instruction, "taskText" to task.taskText,
                             "rule" to task.rule, "nextRunAt" to task.nextRunAt, "enabled" to task.enabled,
                         ) },
+                        "systemSchedules" to listOf(
+                            mapOf("id" to "work_loop_pulse", "name" to "Autonomous work pulse", "rule" to "Every 15 minutes", "enabled" to true, "authority" to "Safety-governed"),
+                            mapOf("id" to "health", "name" to "System health check", "rule" to "Every 30 minutes", "enabled" to true, "authority" to "Internal only"),
+                            mapOf("id" to "commercial_cycle", "name" to "Commercial planning cycle", "rule" to "Every 4 hours", "enabled" to true, "authority" to "Internal planning"),
+                            mapOf("id" to "jiji_market", "name" to "Jiji market intelligence", "rule" to "Every ${config.jijiScrapeIntervalHours} hours, 08:00–20:00", "enabled" to config.jijiScrapingEnabled, "authority" to "Read only"),
+                            mapOf("id" to "jumia_market", "name" to "Jumia market intelligence", "rule" to "Every ${config.jijiScrapeIntervalHours} hours, 08:00–20:00", "enabled" to (config.jumiaIntelligenceEnabled && config.visionConsent), "configured" to config.jumiaIntelligenceEnabled, "authority" to if (config.visionConsent) "Read only + owner-approved vision" else "Needs vision consent"),
+                            mapOf("id" to "tiktok", "name" to "TikTok growth", "rule" to "Every ${config.tikTokPostIntervalMinutes} minutes", "enabled" to config.tikTokTestMode, "authority" to "Standing policy + verification"),
+                            mapOf("id" to "morning", "name" to "Morning broadcast", "rule" to "Daily at ${config.broadcastTime}", "enabled" to config.morningBroadcastEnabled, "authority" to "Consent gated"),
+                        ),
+                        "templates" to co.sanaa.agent.workflows.WorkflowRegistry.all().map { workflow -> mapOf(
+                            "id" to workflow.id,
+                            "name" to workflow.name,
+                            "inputs" to workflow.inputContract.sorted(),
+                            "steps" to workflow.executionGraph.map { it.kind.name },
+                            "approvals" to workflow.consequentialActions.sorted(),
+                            "classification" to workflow.dataClassification.name,
+                        ) },
+                        "learnedRoutineSuggestions" to runtime.learningLoop.routineSuggestions().map { suggestion -> mapOf(
+                            "id" to suggestion.id,
+                            "name" to suggestion.label,
+                            "action" to suggestion.actionType,
+                            "rule" to suggestion.rule,
+                            "evidenceCount" to suggestion.evidenceCount,
+                            "confidence" to suggestion.confidence,
+                            "averageScreenSeconds" to suggestion.averageScreenSeconds,
+                            "authority" to "Suggestion only — owner activation required",
+                        ) },
+                        "skills" to runtime.skillLoader.list().sorted().map { skill ->
+                            mapOf(
+                                "id" to skill,
+                                "name" to skill.replace('-', ' ').split(' ').joinToString(" ") { word -> word.replaceFirstChar(Char::uppercase) },
+                                "command" to if (skill == "soko-tiktok-growth") "Post a Soko product on TikTok" else "Use $skill",
+                                "learning" to if (skill == "soko-tiktok-growth") "Tracks attempted products and verified outcomes; avoids recent repeats." else "On-demand procedure",
+                            )
+                        },
+                        "queue" to runtime.workQueue.dashboard(),
                         "settings" to mapOf(
                             "proactiveReadOnlyAudits" to config.proactiveReadOnlyAudits,
                             "quietHoursStart" to config.quietHoursStart,
@@ -400,6 +440,101 @@ class MainActivity : FlutterActivity() {
                     config.proactiveReadOnlyAudits = call.argument<Boolean>("enabled") == true
                     AgentWorkScheduler.scheduleAll(applicationContext, config.broadcastTime)
                     result.success(true)
+                }
+                "openWhatsappGroup" -> {
+                    val id=call.argument<String>("id").orEmpty()
+                    val entry=runtime.contacts.byId(id)
+                    result.success(entry?.isGroup==true && co.sanaa.agent.modules.WhatsAppConversationRoutes.open(id))
+                }
+                "whatsappGroupSettings" -> {
+                    result.success(runtime.contacts.listAll().filter { it.isGroup }.map(runtime.groupSettings::row))
+                }
+                "updateWhatsappGroup" -> {
+                    try {
+                        runtime.groupSettings.update(runtime.contacts,requireNotNull(call.argument<String>("id")),
+                            requireNotNull(call.argument<String>("field")),requireNotNull(call.argument<Any>("value")))
+                        result.success(true)
+                    } catch(e:Exception) { result.error("GROUP_SETTING",e.message,null) }
+                }
+                "amaraSettings" -> {
+                    val settings = co.sanaa.agent.core.AmaraSettings(this@MainActivity)
+                    result.success(settings.getAll() + mapOf(
+                        "sokoPinStored" to runtime.vault.status(AgentRuntime.SOKO_PIN_ID).let { it.configured && !it.locked },
+                    ))
+                }
+                "marketReport" -> CoroutineScope(Dispatchers.IO).launch {
+                    val report = runCatching { runtime.marketAnalyzer.generateReport() }
+                    withContext(Dispatchers.Main) {
+                        report.fold(result::success) { result.error("MARKET_REPORT_FAILED", it.message, null) }
+                    }
+                }
+                "marketDashboard" -> CoroutineScope(Dispatchers.IO).launch {
+                    val dashboard = runCatching { runtime.marketAnalyzer.dashboard(runtime.chatStore.getProducts()) + mapOf("growth" to runtime.growthStore.dashboard()) }
+                    withContext(Dispatchers.Main) {
+                        dashboard.fold(result::success) { result.error("MARKET_DASHBOARD_FAILED", it.message, null) }
+                    }
+                }
+                "autonomousDashboard" -> CoroutineScope(Dispatchers.IO).launch {
+                    val payload = mapOf(
+                        "loop" to runtime.workLoop.diagnostics(),
+                        "queue" to runtime.workQueue.dashboard(),
+                        "governor" to runtime.safetyGovernor.dashboard(),
+                        "learning" to runtime.learningLoop.dashboard(),
+                        "settings" to co.sanaa.agent.core.AmaraSettings(this@MainActivity).getAll(),
+                    )
+                    withContext(Dispatchers.Main) { result.success(payload) }
+                }
+                "wakeAutonomousLoop" -> {
+                    runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("owner_dashboard_refresh", ""))
+                    result.success(true)
+                }
+                "setAmaraSetting" -> {
+                    val key = call.argument<String>("key").orEmpty()
+                    val value = call.argument<Any>("value")
+                    val settings = co.sanaa.agent.core.AmaraSettings(this@MainActivity)
+                    val success = if (value != null) settings.set(key, value) else false
+                    if (success && key in setOf("tikTokEnabled", "tikTokIntervalMinutes")) {
+                        if (config.tikTokTestMode) AgentWorkScheduler.scheduleTikTokTest(applicationContext)
+                        else WorkManager.getInstance(applicationContext).cancelUniqueWork(co.sanaa.agent.workers.TikTokGrowthWorker.TAG)
+                    }
+                    if (success && value == false) {
+                        val disabledKinds = when (key) {
+                            "whatsAppEnabled" -> setOf(
+                                co.sanaa.agent.core.work.WorkKind.WA_REPLY_INBOUND,
+                                co.sanaa.agent.core.work.WorkKind.WA_FOLLOWUP,
+                                co.sanaa.agent.core.work.WorkKind.WA_BROADCAST,
+                            )
+                            "whatsAppInboundEnabled" -> setOf(co.sanaa.agent.core.work.WorkKind.WA_REPLY_INBOUND)
+                            "whatsAppFollowUpsEnabled" -> setOf(co.sanaa.agent.core.work.WorkKind.WA_FOLLOWUP)
+                            "tikTokEnabled" -> setOf(
+                                co.sanaa.agent.core.work.WorkKind.TIKTOK_POST_PUBLISH,
+                                co.sanaa.agent.core.work.WorkKind.TIKTOK_COMMENT_REPLY,
+                                co.sanaa.agent.core.work.WorkKind.TIKTOK_ANALYTICS_CHECK,
+                            )
+                            else -> emptySet()
+                        }
+                        runtime.workQueue.cancelPending(disabledKinds)
+                    }
+                    if (success) runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("settings_changed", key))
+                    result.success(success)
+                }
+                "backupMemoryNow" -> CoroutineScope(Dispatchers.IO).launch {
+                    val outcome = runCatching { runtime.memoryBackup.backupNow() }
+                    withContext(Dispatchers.Main) {
+                        outcome.fold(
+                            { result.success(mapOf("success" to it.success, "message" to it.message, "items" to it.mergedItems)) },
+                            { result.success(mapOf("success" to false, "message" to (it.message ?: "Backup failed"), "items" to 0)) },
+                        )
+                    }
+                }
+                "restoreMemoryNow" -> CoroutineScope(Dispatchers.IO).launch {
+                    val outcome = runCatching { runtime.memoryBackup.restoreLatest() }
+                    withContext(Dispatchers.Main) {
+                        outcome.fold(
+                            { result.success(mapOf("success" to it.success, "message" to it.message, "items" to it.mergedItems)) },
+                            { result.success(mapOf("success" to false, "message" to (it.message ?: "Restore failed"), "items" to 0)) },
+                        )
+                    }
                 }
                 "stopCurrentTask" -> {
                     lightweightState.putBool(AutonomyController.CANCEL_KEY, true)
@@ -1001,14 +1136,30 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun handleTikTokTest(intent: Intent?) {
+        if (intent?.getBooleanExtra("tiktok_test", false) != true) return
+        intent.removeExtra("tiktok_test")
+        android.util.Log.i("SanaaTest", "Starting TikTok test mode")
+        CoroutineScope(Dispatchers.IO).launch {
+            // Enable TikTok test mode in config
+            config.tikTokTestMode = true
+            // Schedule TikTok posting every 10 minutes
+            co.sanaa.agent.workers.AgentWorkScheduler.scheduleTikTokTest(applicationContext)
+            android.util.Log.i("SanaaTest", "TikTok test mode enabled - posting every 10 minutes")
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         handleTestCommand(intent)
+        handleTikTokTest(intent)
     }
 
     override fun onResume() {
         super.onResume()
         handleTestCommand(intent)
+        handleTikTokTest(intent)
         if (::permissions.isInitialized) {
             MethodChannel(flutterEngine!!.dartExecutor.binaryMessenger, CHANNEL)
                 .invokeMethod("permissionsChanged", permissions.statusMap())

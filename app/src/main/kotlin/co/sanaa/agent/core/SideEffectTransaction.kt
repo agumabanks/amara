@@ -141,6 +141,10 @@ sealed class SideEffectOutcome {
  * unknown capabilities and illegal transitions are rejected outright.
  */
 class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: () -> Long = System::currentTimeMillis) {
+    var evaluationObserver: ((String, String, String) -> Unit)? = null
+    private fun observed(state: String, capability: String, key: String) {
+        try { evaluationObserver?.invoke(state, capability, key) } catch (_: Exception) { /* telemetry cannot affect dispatch */ }
+    }
 
     /**
      * @param capabilityId must exist in [CapabilityCatalog] and be externalSideEffect.
@@ -258,6 +262,7 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
                 return SideEffectOutcome.Failed("The approval was not consumable at the final boundary; nothing was done.")
             }
             ledger.transition(idempotencyKey, SideEffectState.ACTING, "Preflight and authority checks passed; acting once.")
+            observed("ACTING", capabilityId, idempotencyKey)
             val deadlineMs = clock() + spec.timeoutMs
             fun overDeadline(): Boolean = clock() > deadlineMs
             // Contract: act() returns false ONLY when the external trigger provably never
@@ -268,6 +273,8 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
             } catch (error: Throwable) {
                 ledger.transition(idempotencyKey, SideEffectState.UNCERTAIN,
                     "Exception during external action: ${Redactor.redact(error.message ?: error.javaClass.simpleName)}")
+                observed("UNCERTAIN", capabilityId, idempotencyKey)
+                if (error is kotlinx.coroutines.CancellationException) throw error
                 return SideEffectOutcome.Uncertain(
                     "The action was interrupted mid-flight (${error.message ?: "unknown"}); whether it took effect could not be proven.",
                 )
@@ -275,10 +282,12 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
             if (!acted) {
                 val proof = "Action reported the external trigger was never dispatched."
                 ledger.transition(idempotencyKey, SideEffectState.FAILED, proof)
+                observed("FAILED", capabilityId, idempotencyKey)
                 return SideEffectOutcome.Failed(proof.removePrefix("Action reported the "))
             }
             ledger.transition(idempotencyKey, SideEffectState.VERIFICATION_PENDING, "Verifying post-state against the verification contract.")
             val evidence = runCatching { verify() }.getOrElse {
+                if (it is kotlinx.coroutines.CancellationException) throw it
                 VerificationEvidence.impossible("Verifier itself failed: ${it.message ?: "unknown"}")
             }
             if (overDeadline() && evidence.verified) {
@@ -305,6 +314,7 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
                 "blocker=${evidence.blocker?.let(Redactor::redact)?.take(300) ?: "none"}",
             ).joinToString("; ")
             ledger.finalize(idempotencyKey, finalState, redactedEvidence)
+            observed(finalState.name, capabilityId, idempotencyKey)
             return when (finalState) {
                 SideEffectState.VERIFIED -> SideEffectOutcome.Verified(evidence)
                 SideEffectState.FAILED -> SideEffectOutcome.Failed(evidence.blocker ?: "Verification proved no effect occurred.")
@@ -312,6 +322,8 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
             }
         } catch (t: Throwable) {
             ledger.finalize(idempotencyKey, SideEffectState.UNCERTAIN, "Unexpected termination during transaction: ${Redactor.redact(t.message ?: t.javaClass.simpleName)}")
+            observed("UNCERTAIN", capabilityId, idempotencyKey)
+            if (t is kotlinx.coroutines.CancellationException) throw t
             return SideEffectOutcome.Uncertain("The transaction ended unexpectedly; the effect could not be proven.")
         }
     }

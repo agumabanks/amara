@@ -503,6 +503,16 @@ class CredentialVaultLifecycleTest {
         assertTrue(vault.isLocked(ID))
     }
 
+    @Test fun onlyOwnerConfirmedSaveResetsLocalCredentialLockout() {
+        vault.store(ID, PKG, "terminal_login", SECRET.toCharArray())
+        lockSlotViaProductionRejections(SokoCredentialGate(vault, ID, PKG))
+        vault.store(ID, PKG, "terminal_login", SECRET.toCharArray())
+        assertTrue(vault.status(ID).locked)
+        vault.store(ID, PKG, "terminal_login", SECRET.toCharArray(), ownerConfirmedReset = true)
+        assertFalse(vault.status(ID).locked)
+        assertTrue(vault.status(ID).configured)
+    }
+
     @Test
     fun productionLoginFailuresIncrementCounterAndFourthSubmissionIsBlocked() {
         val gate = SokoCredentialGate(vault, ID, PKG)

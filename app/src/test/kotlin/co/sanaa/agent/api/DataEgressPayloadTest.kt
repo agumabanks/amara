@@ -63,6 +63,21 @@ class DataEgressPayloadTest {
         assertEquals(0, server.requestCount)
     }
 
+    @Test fun authenticatedConfigSyncImportsBothModelCredentials() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"groq_api_key":"primary-from-backend","groq_api_key_2":"fallback-from-backend"}""",
+            ),
+        )
+
+        backend.fetchConfig()
+
+        assertEquals("primary-from-backend", config.groqApiKey)
+        assertEquals("fallback-from-backend", config.groqApiKey2)
+        val request = server.takeRequest()
+        assertEquals("Bearer test-agent-token", request.getHeader("Authorization"))
+    }
+
     @Test fun optedInLogIsRedactedAndTruncatedBeforeExport() = runBlocking {
         config.telemetryOptIn = true
         server.enqueue(MockResponse().setBody("{}"))

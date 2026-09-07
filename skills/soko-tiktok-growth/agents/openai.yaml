@@ -1,0 +1,4 @@
+interface:
+  display_name: "Soko TikTok Growth"
+  short_description: "Run and improve governed Soko TikTok posts"
+  default_prompt: "Use $soko-tiktok-growth to prepare or supervise a non-repeating Soko TikTok post."

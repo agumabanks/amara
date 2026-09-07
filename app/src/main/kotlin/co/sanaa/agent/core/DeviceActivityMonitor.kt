@@ -2,6 +2,7 @@ package co.sanaa.agent.core
 
 import android.app.KeyguardManager
 import android.content.Context
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.delay
@@ -9,16 +10,26 @@ import kotlinx.coroutines.delay
 object DeviceActivityMonitor {
     private val automationDepth = AtomicInteger(0)
     @Volatile private var lastExternalInteractionAt: Long = -1
+    @Volatile private var automationEndedAtUptime: Long = -1
 
     fun beginAutomation() { automationDepth.incrementAndGet() }
-    fun endAutomation() { automationDepth.updateAndGet { value -> (value - 1).coerceAtLeast(0) } }
+    fun endAutomation(atUptimeMillis: Long = SystemClock.uptimeMillis()) {
+        // Record before releasing the boundary: queued accessibility events may
+        // arrive after the action coroutine has finished.
+        automationEndedAtUptime = atUptimeMillis
+        automationDepth.updateAndGet { value -> (value - 1).coerceAtLeast(0) }
+    }
 
-    fun observe(eventType: Int, atMillis: Long = System.currentTimeMillis()) {
+    fun observe(
+        eventType: Int,
+        atMillis: Long = System.currentTimeMillis(),
+        eventUptimeMillis: Long = SystemClock.uptimeMillis(),
+    ) {
         if (automationDepth.get() > 0) return
+        if (eventUptimeMillis <= automationEndedAtUptime) return
         if (eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
             eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED ||
-            eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED ||
-            eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
             lastExternalInteractionAt = atMillis
         }
     }
@@ -26,7 +37,11 @@ object DeviceActivityMonitor {
     fun isUserLikelyActive(nowMillis: Long = System.currentTimeMillis(), quietWindowMillis: Long = 30_000): Boolean =
         lastExternalInteractionAt >= 0 && nowMillis - lastExternalInteractionAt in 0 until quietWindowMillis
 
-    fun resetForTest() { lastExternalInteractionAt = -1; automationDepth.set(0) }
+    fun resetForTest() {
+        lastExternalInteractionAt = -1
+        automationEndedAtUptime = -1
+        automationDepth.set(0)
+    }
 }
 
 enum class AvailabilityBlocker { NONE, OWNER_ACTIVE, SCREEN_OFF, SECURE_KEYGUARD, NONSECURE_KEYGUARD }
@@ -50,7 +65,6 @@ data class DeviceAvailability(
  */
 object DeviceAvailabilityGuard {
     const val SECURE_KEYGUARD_REASON = "Owner unlock required; Amara will not attempt credential entry"
-    private const val NONSECURE_DISMISS_POLLS = 3
     private const val FINAL_CHECK_GAP_MS = 50L
     private const val SYNC_WAKE_BUDGET_MS = 600L
     private const val SYNC_POLL_STEP_MS = 100L
@@ -87,18 +101,10 @@ object DeviceAvailabilityGuard {
             if (keyguard.isKeyguardSecure) {
                 return DeviceAvailability(false, AvailabilityBlocker.SECURE_KEYGUARD, SECURE_KEYGUARD_REASON)
             }
-            var dismissPolls = 0
-            while (keyguard.isKeyguardLocked && dismissPolls < NONSECURE_DISMISS_POLLS) {
-                sleeper(pollIntervalMs)
-                dismissPolls++
-            }
-            if (keyguard.isKeyguardLocked) {
-                return DeviceAvailability(
-                    false,
-                    AvailabilityBlocker.NONSECURE_KEYGUARD,
-                    "A lock screen without owner credentials is still showing and did not dismiss on its own.",
-                )
-            }
+            // A swipe-only surface is not a credential boundary. ColorOS can keep
+            // isKeyguardLocked=true in this process even after dumpsys reports
+            // deviceLocked=0; allow foreground work through the activity's existing
+            // SHOW_WHEN_LOCKED/DISMISS_KEYGUARD flags.
         }
         // FINAL observation: availability must hold TWICE, separated by a tiny gap,
         // immediately before reporting available=true.
@@ -107,12 +113,12 @@ object DeviceAvailabilityGuard {
         if (!interactiveOnce) {
             return DeviceAvailability(false, AvailabilityBlocker.SCREEN_OFF, "The phone screen turned off again before work could start.")
         }
-        if (lockedOnce) return relockedResult(keyguard)
+        if (lockedOnce && keyguard.isKeyguardSecure) return relockedResult(keyguard)
         sleeper(FINAL_CHECK_GAP_MS)
         val interactiveTwice = ScreenController.isScreenOn(context)
         val lockedTwice = keyguard.isKeyguardLocked
         return when {
-            interactiveTwice && !lockedTwice ->
+            interactiveTwice && (!lockedTwice || !keyguard.isKeyguardSecure) ->
                 DeviceAvailability(true, AvailabilityBlocker.NONE, "The phone is awake and unlocked for scheduled work.")
             !interactiveTwice ->
                 DeviceAvailability(false, AvailabilityBlocker.SCREEN_OFF, "The phone screen turned off again before work could start.")

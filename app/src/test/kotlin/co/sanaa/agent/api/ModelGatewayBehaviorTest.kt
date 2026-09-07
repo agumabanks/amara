@@ -64,6 +64,29 @@ class ModelGatewayBehaviorTest {
         runCatching { server.shutdown() }
     }
 
+    @Test fun qwenVisionReservesBudgetForGroundedJsonInsteadOfReasoning() = runBlocking {
+        config.groqVisionModel = "qwen/qwen3.6-27b"
+        val screenshot = File.createTempFile("vision-budget", ".png", context.cacheDir).apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        enqueueAll(groqContent("{\"products\":[]}"))
+        client().completeVisionJson("Return JSON with visible products", screenshot)
+        val request = JSONObject(server.takeRequest().body.readUtf8())
+        assertEquals("none", request.getString("reasoning_effort"))
+        assertEquals(1600, request.getInt("max_completion_tokens"))
+        screenshot.delete()
+        Unit
+    }
+
+    @Test fun visionPreflightReportsMissingSettingsWithoutNetwork() {
+        assertNull(client().visionConfigurationBlocker())
+        config.groqVisionModel = ""
+        assertTrue(client().visionConfigurationBlocker()!!.contains("vision model"))
+        config.groqApiKey = ""
+        assertTrue(client().visionConfigurationBlocker()!!.contains("API key"))
+        config.visionConsent = false
+        assertTrue(client().visionConfigurationBlocker()!!.contains("consented"))
+        assertEquals(0, server.requestCount)
+    }
+
     private fun client(readTimeoutMs: Long = 45_000L): GroqClient = GroqClient(
         config,
         memory,
@@ -313,6 +336,16 @@ class ModelGatewayBehaviorTest {
         assertTrue(brainRows().any { it.disposition == "RETRY_EXHAUSTED" })
     }
 
+    @Test fun providerJsonGeneration400UsesBoundedRepair() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(400).setBody(
+            """{"error":{"code":"json_validate_failed","failed_generation":"private generated text"}}"""))
+        server.enqueue(MockResponse().setBody(
+            """{"choices":[{"message":{"content":"{\"message\":\"Hello\"}"}}]}"""))
+        assertEquals("Hello", client().completeJson("Reply in JSON").getString("message"))
+        assertEquals(2, server.requestCount)
+        assertFalse(brainRows().toString().contains("private generated text"))
+    }
+
     @Test
     fun http400GetsExactlyOneAttemptAndPermanentDisposition() = runBlocking {
         statusResponses(400, 3)
@@ -393,6 +426,20 @@ class ModelGatewayBehaviorTest {
         assertEquals(3, server.requestCount)
         assertEquals(listOf(60_000L, 60_000L), sleeps)
         assertTrue(sleeps.all { it <= 60_000L })
+    }
+
+    @Test
+    fun rateLimitedPrimaryUsesBackendManagedFallbackBeforeGatewayRetry() = runBlocking {
+        config.groqApiKey = "primary-key"
+        config.groqApiKey2 = "fallback-key"
+        server.enqueue(MockResponse().setResponseCode(429).setBody("{}"))
+        enqueueAll(groqContent("fallback worked"))
+
+        assertEquals("fallback worked", client().complete("hello"))
+        assertEquals(2, server.requestCount)
+        assertEquals("Bearer primary-key", server.takeRequest().getHeader("Authorization"))
+        assertEquals("Bearer fallback-key", server.takeRequest().getHeader("Authorization"))
+        assertTrue(sleeps.isEmpty())
     }
 
     @Test

@@ -20,6 +20,28 @@ import org.junit.Test
  */
 class SideEffectTransactionTest {
 
+    @Test fun missingBubbleAndPendingTickNeverProveNoEffectOrDelivery() {
+        val base=SendObservation("com.whatsapp","com.whatsapp",true,false,false,null,1L)
+        val absent=SendVerificationLogic.evaluate("reply",base)
+        assertFalse(absent.verified)
+        assertFalse(absent.blocker.orEmpty().contains(SendVerificationLogic.NO_EFFECT_PROVEN))
+        for(status in listOf("pending","failed","sending"))
+            assertFalse(SendVerificationLogic.evaluate("reply",base.copy(contentVisibleOutsideDraft=true,deliveryState=status)).verified)
+        assertTrue(SendVerificationLogic.evaluate("reply",base.copy(contentVisibleOutsideDraft=true,deliveryState="Delivered")).verified)
+    }
+
+    @Test fun cancellationAfterDispatchRemainsUncertainAndPropagates(): Unit = runBlocking {
+        val ledger=FakeLedger()
+        try {
+            SideEffectRunner(ledger).execute("send_whatsapp", "cancel-proof", "A", "msg", initiator=Initiator.OWNER_CHAT,
+                act={ throw kotlinx.coroutines.CancellationException("deadline") },
+                verify={ error("Must not verify after cancellation") })
+            throw AssertionError("Cancellation was swallowed")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            assertEquals(SideEffectState.UNCERTAIN, ledger.find("cancel-proof")?.state)
+        }
+    }
+
     private class FakeLedger : SideEffectLedger {
         val store = java.util.concurrent.ConcurrentHashMap<String, SideEffectTransaction>()
         val rejectedTransitions = mutableListOf<Triple<String, SideEffectState, String>>()

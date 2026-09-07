@@ -12,7 +12,12 @@ import co.sanaa.agent.api.ModelResponseException
 import co.sanaa.agent.api.ModelSchemas
 import org.json.JSONObject
 
-data class SokoIntelligenceResult(val success: Boolean, val summary: String)
+data class SokoIntelligenceResult(
+    val success: Boolean,
+    val summary: String,
+    val alerts: List<co.sanaa.agent.actions.SokoAlert> = emptyList(),
+    val bookings: List<co.sanaa.agent.actions.SokoBooking> = emptyList(),
+)
 
 /** Grounded, read-only business intelligence gathered from the two Soko phone apps. */
 class SokoIntelligenceModule(
@@ -51,7 +56,7 @@ class SokoIntelligenceModule(
                 scan.bookings.joinToString("; ") { "${it.service} for ${it.customer}" } +
                 ". Available actions in Terminal are Confirm, Complete, or Cancel; I did not change any booking."
         }
-        return record("soko_bookings", true, summary)
+        return record("soko_bookings", true, summary, bookings = scan.bookings)
     }
 
     suspend fun auditServices(): SokoIntelligenceResult {
@@ -173,7 +178,7 @@ class SokoIntelligenceModule(
             "I found ${scan.alerts.size} visible Terminal items needing attention: " +
                 scan.alerts.joinToString("; ") { "${it.type}: ${it.subject} — ${it.detail}" } + ". I made no changes."
         }
-        return record("soko_alerts", true, summary)
+        return record("soko_alerts", true, summary, alerts = scan.alerts)
     }
 
     suspend fun auditBuyerServices(): SokoIntelligenceResult {
@@ -207,9 +212,15 @@ class SokoIntelligenceModule(
         return SokoIntelligenceResult(true, summary)
     }
 
-    private fun record(type: String, success: Boolean, summary: String): SokoIntelligenceResult {
+    private fun record(
+        type: String,
+        success: Boolean,
+        summary: String,
+        alerts: List<co.sanaa.agent.actions.SokoAlert> = emptyList(),
+        bookings: List<co.sanaa.agent.actions.SokoBooking> = emptyList(),
+    ): SokoIntelligenceResult {
         memory.recordAction(type, null, "Soko Terminal", type, "Inspected live Soko screens without editing.", summary, null, success)
-        return SokoIntelligenceResult(success, summary)
+        return SokoIntelligenceResult(success, summary, alerts, bookings)
     }
 
     /**

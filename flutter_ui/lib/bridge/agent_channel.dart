@@ -164,7 +164,11 @@ class AgentChannel {
       (await _channel.invokeMethod<Map<dynamic, dynamic>>(
         'runtimeStatusSnapshot',
       ))?.cast<String, dynamic>() ??
-      const {'phase': 'idle', 'detail': 'Ready for the next thing', 'isReady': false};
+      const {
+        'phase': 'idle',
+        'detail': 'Ready for the next thing',
+        'isReady': false,
+      };
 
   static Future<Map<String, dynamic>> missionControl() async =>
       (await _channel.invokeMethod<Map<dynamic, dynamic>>(
@@ -372,6 +376,64 @@ class AgentChannel {
         'reason': reason,
       }) ??
       false;
+
+  // ---- Amara Settings ----
+
+  static Future<Map<String, dynamic>> amaraSettings() async =>
+      (await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'amaraSettings',
+      ))?.cast<String, dynamic>() ??
+      const {};
+
+  static Future<bool> setAmaraSetting(String key, dynamic value) async =>
+      await _channel.invokeMethod<bool>('setAmaraSetting', {
+        'key': key,
+        'value': value,
+      }) ??
+      false;
+
+  static Future<Map<String, dynamic>> backupMemoryNow() async =>
+      (await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'backupMemoryNow',
+      ))?.cast<String, dynamic>() ?? const {'success': false, 'message': 'No result'};
+
+  static Future<Map<String, dynamic>> restoreMemoryNow() async =>
+      (await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'restoreMemoryNow',
+      ))?.cast<String, dynamic>() ?? const {'success': false, 'message': 'No result'};
+
+  static Future<Map<String, dynamic>> runDepartmentWorkflow({
+    required String workflowId,
+    String target = '',
+    num? budgetUgx,
+  }) async =>
+      (await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'runDepartmentWorkflow',
+        {
+          'workflowId': workflowId,
+          'target': target,
+          if (budgetUgx != null) 'budgetUgx': budgetUgx,
+        },
+      ))?.cast<String, dynamic>() ?? const {'state': 'failed'};
+
+  static Future<String> marketReport() async =>
+      await _channel.invokeMethod<String>('marketReport') ??
+      'No market data has been collected yet.';
+
+  static Future<Map<String, dynamic>> marketDashboard() async =>
+      (await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'marketDashboard',
+      ))?.cast<String, dynamic>() ??
+      const {};
+
+  static Future<Map<String, dynamic>> autonomousDashboard() async =>
+      (await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'autonomousDashboard',
+      ))?.cast<String, dynamic>() ??
+      const {};
+
+  static Future<bool> wakeAutonomousLoop() async =>
+      await _channel.invokeMethod<bool>('wakeAutonomousLoop') ?? false;
 
   static Future<void> openAccessibilitySettings() async =>
       await _channel.invokeMethod<void>('openAccessibility');

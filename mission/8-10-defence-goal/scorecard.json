@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "updated_on": "2026-09-06",
+  "criteria_status": "PROPOSED_PENDING_OWNER_RATIFICATION",
+  "pilot_scope": "Sanaa Media; first service pending owner decision",
+  "minimum_accepted_points": 80,
+  "owner_ratified": false,
+  "seven_day_run_accepted": false,
+  "owner_defence_signed": false,
+  "gates": [
+    {
+      "id": "G1",
+      "title": "Identity and truthful commitments",
+      "weight": 15,
+      "critical": true,
+      "status": "UNPROVEN",
+      "reason": "No full post-fix identity sample; controlled and real scenarios still required.",
+      "evidence": [
+        "evidence/baseline.json"
+      ],
+      "reviewer": "",
+      "reviewed_on": ""
+    },
+    {
+      "id": "G2",
+      "title": "Useful timely customer attention",
+      "weight": 20,
+      "critical": true,
+      "status": "FAIL",
+      "reason": "One verified reply and seven unresolved in mixed-build baseline; latest routing fix not accepted.",
+      "evidence": [
+        "evidence/baseline.json"
+      ],
+      "reviewer": "",
+      "reviewed_on": ""
+    },
+    {
+      "id": "G3",
+      "title": "Follow-through and handoff",
+      "weight": 15,
+      "critical": true,
+      "status": "UNPROVEN",
+      "reason": "No qualifying follow-up sample; commercial policy unconfigured in baseline.",
+      "evidence": [
+        "evidence/baseline.json"
+      ],
+      "reviewer": "",
+      "reviewed_on": ""
+    },
+    {
+      "id": "G4",
+      "title": "Group participation",
+      "weight": 10,
+      "critical": false,
+      "status": "PARTIAL",
+      "reason": "Five verified promotions, ten failed; v5 recovery unproven live.",
+      "evidence": [
+        "evidence/baseline.json"
+      ],
+      "reviewer": "",
+      "reviewed_on": ""
+    },
+    {
+      "id": "G5",
+      "title": "TikTok audience value",
+      "weight": 10,
+      "critical": false,
+      "status": "PARTIAL",
+      "reason": "Eight verified posts; uncertain post/comments and no qualified-enquiry evidence.",
+      "evidence": [
+        "evidence/baseline.json"
+      ],
+      "reviewer": "",
+      "reviewed_on": ""
+    },
+    {
+      "id": "G6",
+      "title": "Soko buying clarity",
+      "weight": 10,
+      "critical": true,
+      "status": "UNPROVEN",
+      "reason": "Home access is insufficient for listing quality or order chain.",
+      "evidence": [
+        "evidence/baseline.json"
+      ],
+      "reviewer": "",
+      "reviewed_on": ""
+    },
+    {
+      "id": "G7",
+      "title": "Learning used in decisions",
+      "weight": 5,
+      "critical": false,
+      "status": "UNPROVEN",
+      "reason": "Learning stores exist; measured improvement not established.",
+      "evidence": [
+        "evidence/baseline.json"
+      ],
+      "reviewer": "",
+      "reviewed_on": ""
+    },
+    {
+      "id": "G8",
+      "title": "Owner independence and reporting",
+      "weight": 5,
+      "critical": true,
+      "status": "UNPROVEN",
+      "reason": "Five-hour mixed-build run with interventions is not an uninterrupted working week.",
+      "evidence": [
+        "evidence/baseline.json"
+      ],
+      "reviewer": "",
+      "reviewed_on": ""
+    },
+    {
+      "id": "G9",
+      "title": "Commercial value",
+      "weight": 10,
+      "critical": true,
+      "status": "UNPROVEN",
+      "reason": "Zero recorded commercial outcomes; owner target and costs not configured.",
+      "evidence": [
+        "evidence/baseline.json"
+      ],
+      "reviewer": "",
+      "reviewed_on": ""
+    }
+  ]
+}

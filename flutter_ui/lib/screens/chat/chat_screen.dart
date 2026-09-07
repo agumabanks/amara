@@ -22,12 +22,18 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   bool _busy = false;
   bool _showScrollButton = false;
   bool _typing = false;
+  late final Future<void> _historyReady;
+  Timer? _statusTimer;
 
   @override
   void initState() {
     super.initState();
-    _restoreHistory();
+    _historyReady = _restoreHistory();
     _restoreRuntimeStatus();
+    _statusTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _restoreRuntimeStatus(),
+    );
     _scroll.addListener(_onScroll);
     final initial = widget.initialMessage;
     if (initial != null && initial.isNotEmpty) {
@@ -52,6 +58,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   void dispose() {
     _input.dispose();
     _scroll.dispose();
+    _statusTimer?.cancel();
     super.dispose();
   }
 
@@ -75,11 +82,11 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
               final msg = item['owner'] == true
                   ? _ChatMessage.owner(
                       item['text']?.toString() ?? '',
-                      time: _parseTime(item['created_at']),
+                      time: _parseTime(item['timestamp']),
                     )
                   : _ChatMessage.amara(
                       item['text']?.toString() ?? '',
-                      time: _parseTime(item['created_at']),
+                      time: _parseTime(item['timestamp']),
                     );
               return msg;
             }),
@@ -92,6 +99,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       });
       _goToLatest();
     } on PlatformException {
+      if (!mounted) return;
       setState(() {
         _messages.add(
           _ChatMessage.amara(
@@ -107,7 +115,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     try {
       final value = await AgentChannel.autonomyStatus();
       if (!mounted || _busy) return;
-      final phase = value['phase']?.toString() ?? 'idle';
+      final reportedPhase = value['phase']?.toString() ?? 'idle';
+      final phase = value['active'] == true || value['blocked'] == true
+          ? reportedPhase
+          : 'idle';
       setState(() {
         _phase = phase;
         _phaseDetail =
@@ -130,6 +141,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _send() async {
+    await _historyReady;
+    if (!mounted) return;
     final text = _input.text.trim();
     if (text.isEmpty || _busy) {
       if (_busy && text.isNotEmpty) {
@@ -166,6 +179,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         runAt: DateTime.now(),
       );
       final scheduled = result['status'] == 'scheduled';
+      final queued = result['status'] == 'queued';
       final response = result['message']?.toString().trim();
       if (!mounted) return;
       setState(() {
@@ -183,11 +197,13 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
           _ChatMessage.amara(
             scheduled
                 ? '⏰ Scheduled: ${response ?? text}'
+                : queued
+                ? '⚡ ${response ?? 'Work queued'}'
                 : (response?.isNotEmpty == true
                       ? response!
                       : "I couldn't finish that one."),
             time: DateTime.now(),
-            special: scheduled,
+            special: scheduled || queued,
           ),
         );
       });
@@ -817,6 +833,10 @@ class _PromptIdeas extends StatelessWidget {
                       Icons.storefront_outlined,
                     ),
                     ('Check my WhatsApp groups', Icons.groups_outlined),
+                    (
+                      'Post a Soko product on TikTok',
+                      Icons.video_call_outlined,
+                    ),
                     ('What did you just do?', Icons.history_rounded),
                   ]
                   .map(

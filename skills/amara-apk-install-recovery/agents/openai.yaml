@@ -1,0 +1,4 @@
+interface:
+  display_name: "Amara APK Install & Recovery"
+  short_description: "Safely deploy and certify Amara on OPPO"
+  default_prompt: "Use $amara-apk-install-recovery to install the latest Amara APK and recover/certify its permissions on the connected OPPO."

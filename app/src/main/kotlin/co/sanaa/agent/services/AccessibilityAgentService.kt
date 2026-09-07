@@ -43,7 +43,7 @@ open class AccessibilityAgentService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         try {
-            DeviceActivityMonitor.observe(event.eventType)
+            DeviceActivityMonitor.observe(event.eventType, eventUptimeMillis = event.eventTime)
             if (event.packageName?.toString() != "com.whatsapp" || event.eventType != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) return
             val text = event.text.joinToString(" ").trim()
             if (text.isBlank()) return
@@ -54,7 +54,7 @@ open class AccessibilityAgentService : AccessibilityService() {
             val inbound = WhatsAppNotificationParser.parseAccessibility(text) ?: return
             scope.launch {
                 val runtime = AgentRuntime.get(applicationContext).awaitReady()
-                runtime.conversation.observeWhatsApp(inbound)
+                co.sanaa.agent.core.work.InboundWorkProposer.offerWhatsApp(runtime, inbound, observedAt = now)
             }
         } catch (e: Exception) {
             android.util.Log.e("SanaaA11y", "Event handling error: ${e.message}")

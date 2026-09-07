@@ -7,6 +7,8 @@
         <package android:name="com.soko24.seller" />
         <package android:name="com.soko24.soko_seller_terminal" />
         <package android:name="com.sanaa.soko24u.buyer" />
+        <package android:name="com.olx.ssa.ug" />
+        <package android:name="com.jumia.android" />
     </queries>
 
     <uses-permission android:name="android.permission.INTERNET" />
@@ -108,9 +110,23 @@
                 <action android:name="co.sanaa.agent.action.TEST_WHATSAPP_READ_CHATS" />
                 <action android:name="co.sanaa.agent.action.TEST_WHATSAPP_MONITOR" />
                 <action android:name="co.sanaa.agent.action.TEST_WHATSAPP_READ_GROUP" />
+                <action android:name="co.sanaa.agent.action.TEST_JIJI_READ" />
+                <action android:name="co.sanaa.agent.action.TEST_INSPECTION_PAUSE" />
+                <action android:name="co.sanaa.agent.action.TEST_TIKTOK_SOCIAL" />
                 <action android:name="co.sanaa.agent.action.TEST_WHATSAPP_ATTACHMENT" />
                 <action android:name="co.sanaa.agent.action.TEST_SOKO_STUDIO_SHARE" />
                 <action android:name="co.sanaa.agent.action.TEST_CONFIRM_STUDIO_SHARE" />
+                <action android:name="co.sanaa.agent.action.TEST_WORK_LOOP_WAKE" />
+                <action android:name="co.sanaa.agent.action.TEST_TIKTOK_SOKO_PREPARE" />
+                <action android:name="co.sanaa.agent.action.TEST_TIKTOK_SOKO_POST" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".receivers.TikTokTestReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="co.sanaa.agent.START_TIKTOK_TEST" />
             </intent-filter>
         </receiver>
 
@@ -126,5 +142,11 @@
             android:name=".overlay.OverlayService"
             android:enabled="true"
             android:exported="false" />
+
+        <service
+            android:name=".services.TikTokTestService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

@@ -11,10 +11,7 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen>
     with WidgetsBindingObserver {
-  final _key = TextEditingController();
   PermissionState? _permissions;
-  bool _busy = false, _keySaved = false;
-  String? _message;
 
   @override
   void initState() {
@@ -26,7 +23,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _key.dispose();
     super.dispose();
   }
 
@@ -37,45 +33,20 @@ class _OnboardingScreenState extends State<OnboardingScreen>
 
   Future<void> _refresh() async {
     try {
-      await AgentChannel.syncConfig();
-      final values = await Future.wait([
-        AgentChannel.permissionStatus(),
-        AgentChannel.hasGroqKey(),
-      ]);
+      // Remote configuration is useful, but the owner must still be able to
+      // finish local device setup while the backend is temporarily offline.
+      // Keep local permission discovery independent from the network request.
+      try {
+        await AgentChannel.syncConfig();
+      } on PlatformException {
+        // AgentService and the config worker will retry the sync later.
+      }
+      final permissionState = await AgentChannel.permissionStatus();
       if (mounted) {
-        setState(() {
-          _permissions = values[0] as PermissionState;
-          _keySaved = values[1] as bool;
-        });
+        setState(() => _permissions = permissionState);
       }
     } on MissingPluginException {
       /* Android host is absent in widget previews. */
-    }
-  }
-
-  Future<void> _testGroq() async {
-    if (_key.text.trim().isNotEmpty) {
-      await AgentChannel.saveGroqKey(_key.text.trim());
-    }
-    setState(() {
-      _busy = true;
-      _message = null;
-    });
-    try {
-      final reply = await AgentChannel.testGroq();
-      if (mounted) {
-        setState(() {
-          _keySaved = true;
-          _message = reply;
-          _key.clear();
-        });
-      }
-    } on PlatformException catch (error) {
-      if (mounted) {
-        setState(() => _message = error.message ?? 'Connection failed');
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -91,7 +62,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   @override
   Widget build(BuildContext context) {
     final p = _permissions;
-    final ready = p?.ready == true && _keySaved;
+    final ready = p?.ready == true;
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -158,14 +129,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                       'Reports completed work and asks you when human judgment is needed.',
                   enabled: p?.notifications ?? false,
                   action: AgentChannel.requestNotifications,
-                ),
-                const SizedBox(height: 18),
-                _GroqCard(
-                  controller: _key,
-                  saved: _keySaved,
-                  busy: _busy,
-                  message: _message,
-                  onTest: _testGroq,
                 ),
                 const SizedBox(height: 24),
                 FilledButton(
@@ -318,88 +281,6 @@ class _PermissionCard extends StatelessWidget {
             color: enabled ? const Color(0xFF50E3C2) : Colors.white,
           ),
         ),
-      ],
-    ),
-  );
-}
-
-class _GroqCard extends StatelessWidget {
-  const _GroqCard({
-    required this.controller,
-    required this.saved,
-    required this.busy,
-    required this.message,
-    required this.onTest,
-  });
-  final TextEditingController controller;
-  final bool saved, busy;
-  final String? message;
-  final Future<void> Function() onTest;
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(20),
-    decoration: BoxDecoration(
-      color: const Color(0xFF121616),
-      borderRadius: BorderRadius.circular(18),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Expanded(
-              child: Text(
-                'Groq intelligence',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-              ),
-            ),
-            if (saved)
-              const Icon(Icons.lock, size: 18, color: Color(0xFF50E3C2)),
-          ],
-        ),
-        const SizedBox(height: 7),
-        Text(
-          saved
-              ? 'A key is encrypted on this device. Enter a new one only to replace it.'
-              : 'Your key is encrypted on this device and is never built into the APK.',
-          style: const TextStyle(
-            color: Colors.white54,
-            height: 1.35,
-            fontSize: 13,
-          ),
-        ),
-        const SizedBox(height: 14),
-        TextField(
-          controller: controller,
-          obscureText: true,
-          autocorrect: false,
-          decoration: InputDecoration(
-            hintText: saved ? '•••••••••••• (saved)' : 'gsk_…',
-            suffixIcon: IconButton(
-              onPressed: busy ? null : onTest,
-              icon: busy
-                  ? const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.wifi_tethering),
-            ),
-          ),
-        ),
-        if (message != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Text(
-              message!,
-              style: TextStyle(
-                color: saved
-                    ? const Color(0xFF50E3C2)
-                    : const Color(0xFFF97316),
-                fontSize: 13,
-                height: 1.35,
-              ),
-            ),
-          ),
       ],
     ),
   );

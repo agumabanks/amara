@@ -18,6 +18,25 @@ class SokoApiClient(private val config: SecureConfig) {
 
     suspend fun activeListings(): List<SokoListing> = getArray("listings").mapNotNull(::parseListing)
 
+    /** Authenticated bridge applies the registered business scope server-side. */
+    suspend fun publishedServices(): List<JSONObject> = getArray("services").filter {
+        it.optString("id").isNotBlank() && it.optString("title").isNotBlank() &&
+            it.optString("currency").equals("UGX", true)
+    }
+
+    /** Products and services share rotation, but preserve distinct IDs and routes. */
+    suspend fun promotableOfferings(): List<SokoListing> = activeListings() + publishedServices().map { service ->
+        SokoListing(
+            id = "service:${service.getString("id")}", title = service.getString("title"),
+            description = service.optString("description", service.optString("summary")),
+            priceUgx = service.optLong("base_price"), category = "Services",
+            photoCount = if (service.optString("image_url").isNotBlank()) 1 else 0,
+            viewCount = service.optInt("view_count"), stock = null,
+            imageUrl = service.optString("image_url").takeIf { it.isNotBlank() && it != "null" },
+            raw = JSONObject(service.toString()).put("offering_type", "SERVICE"),
+        )
+    }
+
     suspend fun competitors(category: String): List<SokoListing> = activeListings()
         .filter { category.isNotBlank() && it.category.equals(category, ignoreCase = true) }
 
@@ -54,7 +73,7 @@ class SokoApiClient(private val config: SecureConfig) {
             .build()
         client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IllegalStateException("Soko database bridge returned HTTP ${response.code}: $body")
+            if (!response.isSuccessful) throw IllegalStateException("Soko database bridge returned HTTP ${response.code}")
             val array = JSONObject(body).optJSONArray("data") ?: JSONArray()
             (0 until array.length()).mapNotNull { array.optJSONObject(it) }
         }

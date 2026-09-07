@@ -28,6 +28,7 @@ import co.sanaa.agent.core.OverlayChipState
 import co.sanaa.agent.core.RuntimePhase
 import co.sanaa.agent.core.RuntimeStatusBus
 import co.sanaa.agent.core.WorkStatus
+import co.sanaa.agent.services.AccessibilityAgentService
 
 /**
  * Observational status chip. It never intercepts touches while automation is acting,
@@ -222,6 +223,11 @@ class OverlayService : Service() {
     internal fun currentLayoutParams(): WindowManager.LayoutParams? = params
 
     private fun applyActingFlags(acting: Boolean) {
+        // Ensure UI access happens on the main thread
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { applyActingFlags(acting) }
+            return
+        }
         val p = params ?: return
         p.flags = flagsFor(p.flags, acting)
         val view = overlayView ?: return
@@ -343,7 +349,21 @@ class OverlayService : Service() {
     }
 
     internal fun render(chip: OverlayChipState, keyguardLocked: Boolean) {
+        // Ensure UI access happens on the main thread
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { render(chip, keyguardLocked) }
+            return
+        }
         val view = overlayView ?: return
+        // Amara's own screens already render richer live status. Hiding the compact
+        // system overlay here prevents stale/duplicated telemetry from covering Work,
+        // Chat, or Settings while retaining it over external apps.
+        val foregroundPackage = AccessibilityAgentService.instance
+            ?.rootInActiveWindow?.packageName?.toString()
+        if (foregroundPackage == packageName) {
+            view.visibility = View.GONE
+            return
+        }
         applyActingFlags(chip.acting)
         view.visibility = View.VISIBLE
         val working = chip.working || chip.acting

@@ -21,7 +21,8 @@ String? normalizeUgandaPhone(String? raw) {
 }
 
 class ContactPermissionsScreen extends StatefulWidget {
-  const ContactPermissionsScreen({super.key});
+  const ContactPermissionsScreen({super.key, this.groupsOnly = false});
+  final bool groupsOnly;
 
   @override
   State<ContactPermissionsScreen> createState() =>
@@ -79,6 +80,9 @@ class _ContactPermissionsScreenState extends State<ContactPermissionsScreen> {
   }
 
   Future<void> _setAll(String permission) async {
+    // The existing bulk endpoint covers the whole directory. Never invoke it
+    // from the group-only view where it would unexpectedly affect individuals.
+    if (widget.groupsOnly) return;
     if (_bulkBusy || _permissions.isEmpty) return;
     final granting = permission == 'FULL';
     final confirmed = await showDialog<bool>(
@@ -170,7 +174,9 @@ class _ContactPermissionsScreenState extends State<ContactPermissionsScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
-      title: const Text('Contact permissions'),
+      title: Text(
+        widget.groupsOnly ? 'WhatsApp Groups' : 'Contact permissions',
+      ),
       actions: [
         PopupMenuButton<String>(
           icon: const Icon(Icons.add),
@@ -195,6 +201,31 @@ class _ContactPermissionsScreenState extends State<ContactPermissionsScreen> {
         : ListView(
             padding: const EdgeInsets.fromLTRB(18, 12, 18, 40),
             children: [
+              if (!widget.groupsOnly)
+                ListTile(
+                  leading: const Icon(Icons.groups_outlined),
+                  title: const Text('WhatsApp Groups'),
+                  subtitle: const Text(
+                    'Dedicated monitoring and reply permissions for groups',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push<void>(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          const ContactPermissionsScreen(groupsOnly: true),
+                    ),
+                  ).then((_) => _refresh()),
+                ),
+              if (widget.groupsOnly)
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text(
+                      'Watch permits monitoring only. Reply permits responding. Neither schedules ads. Group rules, ad windows and commercial permissions must be configured before promotion starts.',
+                    ),
+                  ),
+                ),
               const Text(
                 'Choose which contacts and groups Amara can monitor, reply to, send to, or write for. '
                 'Add contacts by picking from your address book or WhatsApp.',
@@ -209,36 +240,37 @@ class _ContactPermissionsScreenState extends State<ContactPermissionsScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  FilledButton.icon(
-                    onPressed: _discovering ? null : _discover,
-                    icon: _discovering
-                        ? const SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.manage_search),
-                    label: const Text('Discover all'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: _bulkBusy || _permissions.isEmpty
-                        ? null
-                        : () => _setAll('FULL'),
-                    icon: const Icon(Icons.done_all),
-                    label: const Text('Allow all'),
-                  ),
-                  TextButton.icon(
-                    onPressed: _bulkBusy || _permissions.isEmpty
-                        ? null
-                        : () => _setAll('NONE'),
-                    icon: const Icon(Icons.block),
-                    label: const Text('Revoke all'),
-                  ),
-                ],
-              ),
+              if (!widget.groupsOnly)
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: _discovering ? null : _discover,
+                      icon: _discovering
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.manage_search),
+                      label: const Text('Discover all'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _bulkBusy || _permissions.isEmpty
+                          ? null
+                          : () => _setAll('FULL'),
+                      icon: const Icon(Icons.done_all),
+                      label: const Text('Allow all'),
+                    ),
+                    TextButton.icon(
+                      onPressed: _bulkBusy || _permissions.isEmpty
+                          ? null
+                          : () => _setAll('NONE'),
+                      icon: const Icon(Icons.block),
+                      label: const Text('Revoke all'),
+                    ),
+                  ],
+                ),
               const SizedBox(height: 18),
               if (_discovered.isNotEmpty) ...[
                 _heading('DISCOVERED', _filtered(_discovered).length),
@@ -260,7 +292,10 @@ class _ContactPermissionsScreenState extends State<ContactPermissionsScreen> {
                 ),
                 const SizedBox(height: 18),
               ],
-              _heading('CONTACT DIRECTORY', _filtered(_permissions).length),
+              _heading(
+                widget.groupsOnly ? 'WHATSAPP GROUPS' : 'CONTACT DIRECTORY',
+                _filtered(_permissions).length,
+              ),
               if (_permissions.isEmpty)
                 _empty(
                   'No contacts have permissions yet. Use + to add contacts.',
@@ -381,6 +416,11 @@ class _ContactPermissionsScreenState extends State<ContactPermissionsScreen> {
   }
 
   List<Map<String, dynamic>> _filtered(List<Map<String, dynamic>> contacts) {
+    if (widget.groupsOnly) {
+      contacts = contacts
+          .where((contact) => contact['isGroup'] == true)
+          .toList();
+    }
     final needle = _query.toLowerCase();
     if (needle.isEmpty) return contacts;
     return contacts

@@ -47,6 +47,13 @@ class GroqClient(
     /** Test seam: injected clock for the circuit breaker cooldown. */
     clock: () -> Long = System::currentTimeMillis,
 ) {
+    @Volatile
+    private var runtimeContextProvider: () -> String = { "" }
+
+    /** Installs owner-controlled local guidance after the runtime composition is ready. */
+    fun setRuntimeContextProvider(provider: () -> String) {
+        runtimeContextProvider = provider
+    }
     private val client = OkHttpClient.Builder()
         .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
@@ -86,10 +93,11 @@ class GroqClient(
                 val body = JSONObject()
                     .put("model", config.groqModel)
                     .put("temperature", 0.2)
-                    .put("max_completion_tokens", 400)
+                    .put("max_completion_tokens", 1200)
                     .put("response_format", JSONObject().put("type", "json_object"))
                     .put("messages", messages)
-                when (val wire = wireCall(key, body, stage)) {
+                if (config.groqModel.startsWith("openai/gpt-oss-")) body.put("reasoning_effort", "low")
+                when (val wire = wireCallWithFallback(key, body, stage)) {
                     is WireOutcome.Failed -> ModelGateway.AttemptResult.Failure(wire.error, wire.retryAfterMs)
                     is WireOutcome.Reply -> jsonOutcome(wire, schema, stage)
                 }
@@ -114,11 +122,19 @@ class GroqClient(
                 .put("temperature", 0.2)
                 .put("max_completion_tokens", 400)
                 .put("messages", messages)
-            when (val wire = wireCall(key, body, STAGE_CHAT_TEXT)) {
+            when (val wire = wireCallWithFallback(key, body, STAGE_CHAT_TEXT)) {
                 is WireOutcome.Failed -> ModelGateway.AttemptResult.Failure(wire.error, wire.retryAfterMs)
                 is WireOutcome.Reply -> ModelGateway.AttemptResult.Success(wire.content.trim())
             }
         }
+    }
+
+    /** Local preflight; never opens an app or sends a screenshot. */
+    fun visionConfigurationBlocker(): String? = when {
+        !config.visionConsent -> "The owner has not consented to sending screenshots to the vision model."
+        config.groqApiKey.isBlank() -> "Groq API key is not configured"
+        config.groqVisionModel.isBlank() -> "A Groq vision model is not configured"
+        else -> null
     }
 
     /** Legacy vision entry point: strict JSON, no schema validation. */
@@ -155,10 +171,11 @@ class GroqClient(
                 val body = JSONObject()
                     .put("model", model)
                     .put("temperature", 0.1)
-                    .put("max_completion_tokens", 700)
+                    .put("max_completion_tokens", 1600)
                     .put("response_format", JSONObject().put("type", "json_object"))
                     .put("messages", messages)
-                when (val wire = wireCall(key, body, stage)) {
+                if (model in setOf("qwen/qwen3.6-27b", "qwen/qwen3.8-27b")) body.put("reasoning_effort", "none")
+                when (val wire = wireCallWithFallback(key, body, stage)) {
                     is WireOutcome.Failed -> ModelGateway.AttemptResult.Failure(wire.error, wire.retryAfterMs)
                     is WireOutcome.Reply -> jsonOutcome(wire, schema, stage)
                 }
@@ -187,7 +204,9 @@ class GroqClient(
             memoryContext = runCatching { memory?.promptContext() }.getOrNull() ?: "No device memory available",
         )
         val base = SystemPromptBuilder.build(context)
-        return if (jsonMode) "$base\nReturn ONLY valid JSON. No commentary." else base
+        val localGuidance = runCatching { runtimeContextProvider().take(6_000) }.getOrDefault("")
+        val enriched = if (localGuidance.isBlank()) base else "$base\n\nOwner-controlled local guidance:\n${co.sanaa.agent.core.Redactor.redact(localGuidance)}"
+        return if (jsonMode) "$enriched\nReturn ONLY valid JSON. No commentary." else enriched
     }
 
     private sealed class WireOutcome {
@@ -230,7 +249,17 @@ class GroqClient(
             fun failed(kind: ModelFailureKind, message: String, errors: List<String>, retryAfterMs: Long? = null) =
                 WireOutcome.Failed(attachRequestId(ModelResponseException(message, kind, stage, hash, validationErrors = errors), requestId), retryAfterMs)
 
+            // Persist only the provider's structural code, never its generated
+            // text or request echoes. Invalid generated JSON is repairable; an
+            // invalid API request or credential remains a one-attempt failure.
+            val providerCode = runCatching {
+                JSONObject(rawBody).optJSONObject("error")?.optString("code").orEmpty()
+            }.getOrDefault("").takeIf { it.matches(Regex("[a-zA-Z0-9_]{1,80}")) }.orEmpty()
             when {
+                resp.code == 400 && providerCode == "json_validate_failed" -> failed(
+                    ModelFailureKind.MALFORMED_ASSISTANT_JSON,
+                    "Model provider could not generate valid JSON", listOf("HTTP_400", providerCode),
+                )
                 resp.code == 429 -> failed(
                     ModelFailureKind.RATE_LIMITED, "Rate limited by the model provider (429)",
                     listOf("HTTP_429"), ModelGateway.parseRetryAfterSeconds(resp.header("Retry-After")),
@@ -242,8 +271,8 @@ class GroqClient(
                     ModelFailureKind.SERVER_RETRYABLE, "Model provider server error (${resp.code})", listOf("HTTP_${resp.code}"),
                 )
                 resp.code in 400..499 -> failed(
-                    ModelFailureKind.PERMANENT_CLIENT, "Model provider rejected the request permanently (${resp.code})",
-                    listOf("HTTP_${resp.code}"),
+                    ModelFailureKind.PERMANENT_CLIENT, "Model provider rejected the request permanently (${resp.code}${if (providerCode.isBlank()) "" else ": $providerCode"})",
+                    listOf("HTTP_${resp.code}") + listOf(providerCode).filter(String::isNotBlank),
                 )
                 !resp.isSuccessful -> failed(
                     ModelFailureKind.SERVER_RETRYABLE, "Unexpected model provider status (${resp.code})", listOf("HTTP_${resp.code}"),
@@ -262,6 +291,20 @@ class GroqClient(
             }
         }
         return outcome
+    }
+
+    /** Fail over once to the backend-managed secondary credential on rate limits. */
+    private fun wireCallWithFallback(primaryKey: String, body: JSONObject, stage: String): WireOutcome {
+        val primary = wireCall(primaryKey, body, stage)
+        val fallbackKey = config.groqApiKey2
+        if (primary is WireOutcome.Failed &&
+            primary.error.kind == ModelFailureKind.RATE_LIMITED &&
+            fallbackKey.isNotBlank() && fallbackKey != primaryKey
+        ) {
+            Log.i(TAG, "Primary key rate limited (429), retrying with fallback key")
+            return wireCall(fallbackKey, body, stage)
+        }
+        return primary
     }
 
     private fun classifiedTransportFailure(error: IOException, stage: String): ModelResponseException {

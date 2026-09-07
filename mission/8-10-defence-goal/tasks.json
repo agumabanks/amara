@@ -1,0 +1,419 @@
+{
+  "schema_version": 1,
+  "updated_on": "2026-09-06",
+  "states": [
+    "PLANNED",
+    "NEEDS_OWNER",
+    "IN_PROGRESS",
+    "AWAITING_EVIDENCE",
+    "COMPLETE"
+  ],
+  "tasks": [
+    {
+      "id": "DOC-01",
+      "priority": "P0",
+      "module": "Mission",
+      "title": "Maintain an evidence-based 8/10 mission pack",
+      "state": "COMPLETE",
+      "gate_ids": [],
+      "depends_on": [],
+      "acceptance": "Documents, baseline, valid task/gate references and reproducible local dashboard exist.",
+      "next_action": "Update after every meaningful implementation or evidence review.",
+      "evidence": [
+        "README.md",
+        "evidence/baseline.json"
+      ],
+      "implementation": [
+        "scripts/update_progress.py"
+      ],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "BUS-01",
+      "priority": "P0",
+      "module": "Business",
+      "title": "Freeze first service, business facts and weekly value target",
+      "state": "NEEDS_OWNER",
+      "gate_ids": [
+        "G6",
+        "G9"
+      ],
+      "depends_on": [],
+      "acceptance": "D1\u2013D3 and D6 recorded with owner authority; commercial policy reflects approved decisions.",
+      "next_action": "Prepare service brief from Soko; ask owner only for missing price/authority/target inputs.",
+      "evidence": [
+        "logs/DECISIONS.md"
+      ],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "WA-01",
+      "priority": "P0",
+      "module": "WhatsApp",
+      "title": "Prove correct recipient and conversation continuity",
+      "state": "AWAITING_EVIDENCE",
+      "gate_ids": [
+        "G1",
+        "G2"
+      ],
+      "depends_on": [],
+      "acceptance": "Same-name/short-name/direct/group scenarios pass target-bound checks; no cross-chat context; lost routes hold visibly.",
+      "next_action": "Run authorised controlled identity cases, then collect real incoming evidence.",
+      "evidence": [
+        "../amara-whatsapp-origin-groups.md"
+      ],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/modules/WhatsAppConversationRoutes.kt",
+        "app/src/main/kotlin/co/sanaa/agent/modules/HumanConversationEngine.kt"
+      ],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "WA-02",
+      "priority": "P0",
+      "module": "WhatsApp",
+      "title": "Deliver useful replies and quote-ready handoffs",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G2",
+        "G3"
+      ],
+      "depends_on": [
+        "BUS-01",
+        "WA-01"
+      ],
+      "acceptance": "G2 sample/quality target and approved qualification/handoff brief met.",
+      "next_action": "Review real unresolved cases and customer questions; define useful reply and required service inputs.",
+      "evidence": [],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "WA-03",
+      "priority": "P0",
+      "module": "WhatsApp",
+      "title": "Reconcile unresolved historical replies without blind resend",
+      "state": "IN_PROGRESS",
+      "gate_ids": [
+        "G1",
+        "G2"
+      ],
+      "depends_on": [],
+      "acceptance": "Every historical unresolved item has verified delivery or an explicit unresolved/owner disposition.",
+      "next_action": "Triage 12 retained review cases; reconcile delivery read-only and restore originating routes only with verified evidence.",
+      "evidence": [
+        "../amara-whatsapp-deep-repair.md",
+        "evidence/baseline.json",
+        "evidence/FOLLOWUP-IDENTITY-20260906.md"
+      ],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "FU-01",
+      "priority": "P0",
+      "module": "Follow-up",
+      "title": "Complete consent-aware follow-up and handoff journey",
+      "state": "IN_PROGRESS",
+      "gate_ids": [
+        "G3",
+        "G9"
+      ],
+      "depends_on": [
+        "BUS-01",
+        "WA-01"
+      ],
+      "acceptance": "Due-time, decline/stop, escalation and outcome evidence meets G3; origin-keyed history resolves correctly.",
+      "next_action": "Validate and deploy identity/draft protections; complete explicit phone binding, approved policy and live follow-up evidence.",
+      "evidence": [
+        "evidence/FOLLOWUP-IDENTITY-20260906.md"
+      ],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/modules/WhatsAppFollowUpIdentity.kt",
+        "app/src/main/kotlin/co/sanaa/agent/core/work/WorkExecutor.kt",
+        "app/src/main/kotlin/co/sanaa/agent/core/work/WorkQueue.kt"
+      ],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "GR-01",
+      "priority": "P0",
+      "module": "Groups",
+      "title": "Validate destination holds and recover real intended groups",
+      "state": "AWAITING_EVIDENCE",
+      "gate_ids": [
+        "G1",
+        "G4"
+      ],
+      "depends_on": [],
+      "acceptance": "v5 pause reason/resume works live; intended destinations have exact identity and writable membership; failures remain counted.",
+      "next_action": "Review failed saved destinations and test safe recovery; do not assume no-result is a transient click failure.",
+      "evidence": [
+        "../amara-group-log-review-20260906.md"
+      ],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/modules/WhatsAppGroupSettings.kt",
+        "app/src/main/kotlin/co/sanaa/agent/actions/AccessibilityActions.kt"
+      ],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "GR-02",
+      "priority": "P1",
+      "module": "Groups",
+      "title": "Add audience purpose and group participation profiles",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G4"
+      ],
+      "depends_on": [
+        "BUS-01",
+        "GR-01"
+      ],
+      "acceptance": "Owner-approved profile covers group rules, relevant offers, listening/reply behaviour and cadence; useful participation reviewed.",
+      "next_action": "Draft profile and reply-vs-listen examples for owner-designated groups.",
+      "evidence": [],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "GR-03",
+      "priority": "P0",
+      "module": "Groups",
+      "title": "Reconcile directory and notification identities explicitly",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G1",
+        "G4"
+      ],
+      "depends_on": [
+        "WA-01"
+      ],
+      "acceptance": "Owner can identify/link duplicate records without name-based automatic grants or ambiguous media targeting.",
+      "next_action": "Design explicit identity confirmation, revocation preservation and audit trail.",
+      "evidence": [
+        "../amara-whatsapp-origin-groups.md"
+      ],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "TT-01",
+      "priority": "P1",
+      "module": "TikTok",
+      "title": "Create a consistent Sanaa Media editorial programme",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G5"
+      ],
+      "depends_on": [
+        "BUS-01"
+      ],
+      "acceptance": "Approved content series, catalogue facts, media permissions and enquiry route; G5 publication/quality evidence.",
+      "next_action": "Draft a week of service-focused concepts and define baseline audience metrics.",
+      "evidence": [],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "TT-02",
+      "priority": "P0",
+      "module": "TikTok",
+      "title": "Resolve social interaction uncertainty and measure usefulness",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G1",
+        "G5"
+      ],
+      "depends_on": [],
+      "acceptance": "Uncertain comments reconciled or held; future interactions verified and relevant; no blind duplicates.",
+      "next_action": "Review five uncertain-comment outcomes before increasing interaction volume.",
+      "evidence": [
+        "evidence/baseline.json"
+      ],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "SO-01",
+      "priority": "P0",
+      "module": "Soko",
+      "title": "Make first service listings complete and trustworthy",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G6"
+      ],
+      "depends_on": [
+        "BUS-01"
+      ],
+      "acceptance": "At least five actual offerings meet buying checklist; three authorised improvements have before/after verification.",
+      "next_action": "Audit actual catalogue against inclusions, pricing basis, turnaround, inputs and examples.",
+      "evidence": [],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "SO-02",
+      "priority": "P0",
+      "module": "Soko",
+      "title": "Connect enquiries to paid orders and costs",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G6",
+        "G9"
+      ],
+      "depends_on": [
+        "BUS-01",
+        "WA-02"
+      ],
+      "acceptance": "Unique traceable enquiry/order/payment records; direct/assisted/unknown attribution; refunds/costs reconciled.",
+      "next_action": "Define minimal order evidence and owner reconciliation workflow; do not infer sales from posts.",
+      "evidence": [],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "LE-01",
+      "priority": "P1",
+      "module": "Learning",
+      "title": "Turn market/conversation feedback into measured improvements",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G7"
+      ],
+      "depends_on": [
+        "SO-01",
+        "TT-01"
+      ],
+      "acceptance": "Three reviewed observation\u2192change\u2192outcome chains, including one measured positive result.",
+      "next_action": "Choose one customer uncertainty for Jiji/Jumia research; use experiment template and retention rules.",
+      "evidence": [],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "RP-01",
+      "priority": "P0",
+      "module": "Reporting",
+      "title": "Give the owner one useful truthful daily report",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G8",
+        "G9"
+      ],
+      "depends_on": [
+        "BUS-01"
+      ],
+      "acceptance": "Seven reports separate attempts, verified delivery, uncertainty, business results, costs and owner decisions.",
+      "next_action": "Use daily template and review first report with owner; record source completeness.",
+      "evidence": [],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "OBS-01",
+      "priority": "P0",
+      "module": "Evidence",
+      "title": "Enable a complete seven-day observation plan",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G2",
+        "G8",
+        "G9"
+      ],
+      "depends_on": [],
+      "acceptance": "Journalling/collector plan covers full scoped week with interruption/build segmentation and private evidence retention.",
+      "next_action": "Extend or orchestrate bounded logger safely; prove no silent measurement gaps before acceptance.",
+      "evidence": [
+        "EVALUATION-PLAN.md"
+      ],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "RUN-01",
+      "priority": "P0",
+      "module": "Acceptance",
+      "title": "Run the scoped Sanaa Media pilot and collect sufficient traffic",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6",
+        "G7",
+        "G8",
+        "G9"
+      ],
+      "depends_on": [
+        "BUS-01",
+        "WA-01",
+        "WA-02",
+        "WA-03",
+        "FU-01",
+        "GR-01",
+        "GR-02",
+        "GR-03",
+        "TT-01",
+        "TT-02",
+        "SO-01",
+        "SO-02",
+        "LE-01",
+        "RP-01",
+        "OBS-01"
+      ],
+      "acceptance": "Frozen seven-day scope, sample minimums, audited denominators and no routine rescue; insufficient traffic extends run.",
+      "next_action": "Complete critical readiness tasks and ratify gates; do not start a nominal clock without coverage.",
+      "evidence": [],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    },
+    {
+      "id": "DEF-01",
+      "priority": "P0",
+      "module": "Acceptance",
+      "title": "Conduct owner defence review",
+      "state": "PLANNED",
+      "gate_ids": [
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6",
+        "G7",
+        "G8",
+        "G9"
+      ],
+      "depends_on": [
+        "RUN-01"
+      ],
+      "acceptance": "At least 80 accepted points, all critical gates accepted, owner sign-off and defined scope.",
+      "next_action": "Use defence template; reject unsupported claims and document dissent.",
+      "evidence": [],
+      "implementation": [],
+      "owner": "Amara product/engineering; owner reviews business decisions",
+      "updated_on": "2026-09-06"
+    }
+  ]
+}

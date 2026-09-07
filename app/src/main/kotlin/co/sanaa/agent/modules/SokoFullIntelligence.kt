@@ -14,6 +14,11 @@ data class SokoSectionReport(
     val failure: String? = null,
 )
 
+data class SokoShopReport(val sections: List<SokoSectionReport>) {
+    val success: Boolean get() = sections.isNotEmpty() && sections.all { it.failure == null }
+    val summary: String get() = sections.joinToString("\n\n") { "${it.section}:\n${it.summary}" }
+}
+
 class SokoFullIntelligence(
     private val config: SecureConfig,
     private val actions: AccessibilityActions,
@@ -29,13 +34,13 @@ class SokoFullIntelligence(
     private val credentialAudit: SokoCredentialAuditor? = null,
 ) {
     suspend fun readDashboard(): SokoSectionReport {
-        if (!actions.openSokoTerminal()) return SokoSectionReport("Dashboard", "Could not open Soko Terminal", emptyList())
-        if (actions.waitForForegroundPackage("com.soko24.soko_seller_terminal") == null) return SokoSectionReport("Dashboard", "Soko Terminal did not open", emptyList())
+        if (!actions.openSokoTerminal()) return SokoSectionReport("Dashboard", "Could not open Soko Terminal", emptyList(), "Could not open Soko Terminal")
+        if (actions.waitForForegroundPackage("com.soko24.soko_seller_terminal") == null) return SokoSectionReport("Dashboard", "Soko Terminal did not open", emptyList(), "Soko Terminal did not open")
         kotlinx.coroutines.delay(1_500)
-        if (!actions.recoverSokoHome("")) return SokoSectionReport("Dashboard", "Could not reach Soko home", emptyList())
-        if (!actions.clickAndLearn("com.soko24.soko_seller_terminal", "open_more", "More")) return SokoSectionReport("Dashboard", "Could not open menu", emptyList())
-        if (!actions.scrollUntil("Dashboard", 5)) return SokoSectionReport("Dashboard", "Could not find Dashboard section", emptyList())
-        if (!actions.clickExactLabel("Dashboard")) return SokoSectionReport("Dashboard", "Could not open Dashboard", emptyList())
+        if (!recoverHome()) return SokoSectionReport("Dashboard", "Could not reach Soko home", emptyList(), "Could not reach Soko home")
+        if (!actions.clickAndLearn("com.soko24.soko_seller_terminal", "open_more", "More")) return SokoSectionReport("Dashboard", "Could not open menu", emptyList(), "Could not open menu")
+        if (!actions.scrollUntil("Dashboard", 5)) return SokoSectionReport("Dashboard", "Could not find Dashboard section", emptyList(), "Could not find Dashboard section")
+        if (!actions.clickExactLabel("Dashboard")) return SokoSectionReport("Dashboard", "Could not open Dashboard", emptyList(), "Could not open Dashboard")
         actions.pause(co.sanaa.agent.core.InteractionKind.APP_LOAD)
         val screen = actions.snapshot()
         val items = screen.visibleText.filter { it.isNotBlank() && !setOf("Back", "More", "Sync data", "TODAY", "DAILY").contains(it.trim()) }
@@ -44,10 +49,10 @@ class SokoFullIntelligence(
     }
 
     suspend fun readCustomers(): SokoSectionReport {
-        if (!actions.openSokoTerminal()) return SokoSectionReport("Customers", "Could not open Soko Terminal", emptyList())
-        if (!actions.recoverSokoHome("")) return SokoSectionReport("Customers", "Could not reach Soko home", emptyList())
-        if (!actions.clickAndLearn("com.soko24.soko_seller_terminal", "open_more", "More")) return SokoSectionReport("Customers", "Could not open menu", emptyList())
-        if (!actions.clickExactLabel("Customers")) return SokoSectionReport("Customers", "Could not open Customers", emptyList())
+        if (!actions.openSokoTerminal()) return SokoSectionReport("Customers", "Could not open Soko Terminal", emptyList(), "Could not open Soko Terminal")
+        if (!recoverHome()) return SokoSectionReport("Customers", "Could not reach Soko home", emptyList(), "Could not reach Soko home")
+        if (!actions.clickAndLearn("com.soko24.soko_seller_terminal", "open_more", "More")) return SokoSectionReport("Customers", "Could not open menu", emptyList(), "Could not open menu")
+        if (!actions.clickExactLabel("Customers")) return SokoSectionReport("Customers", "Could not open Customers", emptyList(), "Could not open Customers")
         actions.pause(co.sanaa.agent.core.InteractionKind.APP_LOAD)
         val screen = actions.snapshot()
         val items = screen.visibleText.filter { it.isNotBlank() && !setOf("Back", "More", "Search", "Add customer").contains(it.trim()) }
@@ -56,10 +61,10 @@ class SokoFullIntelligence(
     }
 
     suspend fun readOrders(): SokoSectionReport {
-        if (!actions.openSokoTerminal()) return SokoSectionReport("Orders", "Could not open Soko Terminal", emptyList())
-        if (!actions.recoverSokoHome("")) return SokoSectionReport("Orders", "Could not reach Soko home", emptyList())
-        if (!actions.clickAndLearn("com.soko24.soko_seller_terminal", "open_more", "More")) return SokoSectionReport("Orders", "Could not open menu", emptyList())
-        if (!actions.clickExactLabel("Orders")) return SokoSectionReport("Orders", "Could not open Orders", emptyList())
+        if (!actions.openSokoTerminal()) return SokoSectionReport("Orders", "Could not open Soko Terminal", emptyList(), "Could not open Soko Terminal")
+        if (!recoverHome()) return SokoSectionReport("Orders", "Could not reach Soko home", emptyList(), "Could not reach Soko home")
+        if (!actions.clickAndLearn("com.soko24.soko_seller_terminal", "open_more", "More")) return SokoSectionReport("Orders", "Could not open menu", emptyList(), "Could not open menu")
+        if (!actions.clickExactLabel("Orders")) return SokoSectionReport("Orders", "Could not open Orders", emptyList(), "Could not open Orders")
         actions.pause(co.sanaa.agent.core.InteractionKind.APP_LOAD)
         val screen = actions.snapshot()
         val items = screen.visibleText.filter { it.isNotBlank() && !setOf("Back", "More", "Search", "Filter").contains(it.trim()) }
@@ -72,46 +77,32 @@ class SokoFullIntelligence(
         // parallel module wired to the plaintext config copy.
         val soko = SokoIntelligenceModule(config, actions, memory, groq, pin = pin, credentialAudit = credentialAudit)
         val result = soko.alertsNeedingAction()
-        return SokoSectionReport("Alerts", result.summary, result.summary.split("; "))
+        return SokoSectionReport("Alerts", result.summary, result.summary.split("; "),
+            if (result.success) null else result.summary)
     }
 
     suspend fun readProducts(): SokoSectionReport {
-        val items = mutableListOf<String>()
-        var screens = 0
-        var reachedEnd = false
-        var duplicates = 0
-        var seen = setOf<String>()
-        repeat(20) {
-            val screen = actions.snapshot()
-            val labels = screen.visibleText.filter { it.isNotBlank() }
-            val parsed = SokoInventoryParser.parse(labels)
-            val newItems = parsed.filter { item ->
-                val key = item.name.lowercase().filter { it.isLetterOrDigit() }
-                if (key in seen) {
-                    duplicates++
-                    false
-                } else {
-                    seen = seen + key
-                    true
-                }
-            }
-            items.addAll(newItems.map { "${it.name} — ${it.priceText.ifBlank { "price not shown" }} (${it.stockState})" })
-            screens++
-            if (!actions.scrollDown()) {
-                reachedEnd = true
-                return@repeat
-            }
-            actions.pause(co.sanaa.agent.core.InteractionKind.SCROLL_SETTLE)
+        val result = SokoInventoryModule(config, actions, memory, pin = pin).scan()
+        return SokoSectionReport("Products", result.summary,
+            result.items.map { it.name }, if (result.success) null else result.summary)
+    }
+
+    private suspend fun recoverHome(): Boolean {
+        val credential = pin()
+        if (credential.isBlank()) return false
+        val recovered = actions.recoverSokoHome(credential)
+        if (recovered) credentialAudit?.onLoginAccepted()
+        else if (actions.snapshot().contains("Staff Login")) {
+            credentialAudit?.onLoginRejected(SokoIntelligenceModule.AUTH_REJECTED_CODE)
         }
-        memory.recordAction("soko_products", null, "Soko Terminal", "Read Products", "Read ${items.size} products across $screens screens", "Product scan complete.", null, true)
-        return SokoSectionReport("Products", "${items.size} products across $screens screens${if (reachedEnd) " (reached end)" else ""}", items.take(15))
+        return recovered
     }
 
     suspend fun readRefunds(): SokoSectionReport {
-        if (!actions.openSokoTerminal()) return SokoSectionReport("Refunds", "Could not open Soko Terminal", emptyList())
-        if (!actions.recoverSokoHome("")) return SokoSectionReport("Refunds", "Could not reach Soko home", emptyList())
-        if (!actions.clickAndLearn("com.soko24.soko_seller_terminal", "open_more", "More")) return SokoSectionReport("Refunds", "Could not open menu", emptyList())
-        if (!actions.clickExactLabel("Refunds")) return SokoSectionReport("Refunds", "Could not open Refunds", emptyList())
+        if (!actions.openSokoTerminal()) return SokoSectionReport("Refunds", "Could not open Soko Terminal", emptyList(), "Could not open Soko Terminal")
+        if (!recoverHome()) return SokoSectionReport("Refunds", "Could not reach Soko home", emptyList(), "Could not reach Soko home")
+        if (!actions.clickAndLearn("com.soko24.soko_seller_terminal", "open_more", "More")) return SokoSectionReport("Refunds", "Could not open menu", emptyList(), "Could not open menu")
+        if (!actions.clickExactLabel("Refunds")) return SokoSectionReport("Refunds", "Could not open Refunds", emptyList(), "Could not open Refunds")
         actions.pause(co.sanaa.agent.core.InteractionKind.APP_LOAD)
         val screen = actions.snapshot()
         val items = screen.visibleText.filter { it.isNotBlank() && !setOf("Back", "More", "Search").contains(it.trim()) }
@@ -120,11 +111,11 @@ class SokoFullIntelligence(
     }
 
     suspend fun readSuppliers(): SokoSectionReport {
-        if (!actions.openSokoTerminal()) return SokoSectionReport("Suppliers", "Could not open Soko Terminal", emptyList())
-        if (!actions.recoverSokoHome("")) return SokoSectionReport("Suppliers", "Could not reach Soko home", emptyList())
-        if (!actions.clickAndLearn("com.soko24.soko_seller_terminal", "open_more", "More")) return SokoSectionReport("Suppliers", "Could not open menu", emptyList())
-        if (!actions.scrollUntil("Suppliers", 5)) return SokoSectionReport("Suppliers", "Could not find Suppliers", emptyList())
-        if (!actions.clickExactLabel("Suppliers")) return SokoSectionReport("Suppliers", "Could not open Suppliers", emptyList())
+        if (!actions.openSokoTerminal()) return SokoSectionReport("Suppliers", "Could not open Soko Terminal", emptyList(), "Could not open Soko Terminal")
+        if (!recoverHome()) return SokoSectionReport("Suppliers", "Could not reach Soko home", emptyList(), "Could not reach Soko home")
+        if (!actions.clickAndLearn("com.soko24.soko_seller_terminal", "open_more", "More")) return SokoSectionReport("Suppliers", "Could not open menu", emptyList(), "Could not open menu")
+        if (!actions.scrollUntil("Suppliers", 5)) return SokoSectionReport("Suppliers", "Could not find Suppliers", emptyList(), "Could not find Suppliers")
+        if (!actions.clickExactLabel("Suppliers")) return SokoSectionReport("Suppliers", "Could not open Suppliers", emptyList(), "Could not open Suppliers")
         actions.pause(co.sanaa.agent.core.InteractionKind.APP_LOAD)
         val screen = actions.snapshot()
         val items = screen.visibleText.filter { it.isNotBlank() && !setOf("Back", "More", "Add supplier").contains(it.trim()) }
@@ -133,6 +124,10 @@ class SokoFullIntelligence(
     }
 
     suspend fun fullShopReport(): String {
+        return fullShopReportResult().summary
+    }
+
+    suspend fun fullShopReportResult(): SokoShopReport {
         val sections = listOf(
             readDashboard(),
             readAlerts(),
@@ -140,8 +135,6 @@ class SokoFullIntelligence(
             readCustomers(),
             readProducts(),
         )
-        return sections.joinToString("\n\n") { report ->
-            "${report.section}:\n${report.summary}"
-        }
+        return SokoShopReport(sections)
     }
 }

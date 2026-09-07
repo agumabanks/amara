@@ -8,13 +8,38 @@ import co.sanaa.agent.actions.TargetBoundVerifiers
 import co.sanaa.agent.api.BackendSync
 import co.sanaa.agent.api.GroqClient
 import co.sanaa.agent.api.SokoApiClient
+import co.sanaa.agent.core.ChatStore
 import co.sanaa.agent.core.artifacts.SqliteArtifactStore
 import co.sanaa.agent.core.commerce.RevenueOperatorRuntime
+import co.sanaa.agent.core.context.ContextLoader
+import co.sanaa.agent.core.knowledge.ConnectivityMonitor
+import co.sanaa.agent.core.knowledge.DeviceSelfKnowledge
 import co.sanaa.agent.core.knowledge.KnowledgeBase
+import co.sanaa.agent.core.knowledge.LearningDatabase
+import co.sanaa.agent.core.knowledge.LearningLoop
+import co.sanaa.agent.core.market.*
+import co.sanaa.agent.core.memory.BoundedMemory
+import co.sanaa.agent.core.mode.*
+import co.sanaa.agent.core.skills.SkillLoader
+import co.sanaa.agent.core.soul.SoulLoader
 import co.sanaa.agent.core.work.DurableBudgetMeter
 import co.sanaa.agent.core.work.DurableWorkflowCoordinator
 import co.sanaa.agent.core.work.SqliteWorkflowStore
 import co.sanaa.agent.core.work.SpendMeter
+import co.sanaa.agent.core.work.WorkQueue
+import co.sanaa.agent.core.work.SafetyGovernor
+import co.sanaa.agent.core.work.OwnerPresenceMonitor
+import co.sanaa.agent.core.work.PhoneTimeBudgeter
+import co.sanaa.agent.core.work.WorkExecutor
+import co.sanaa.agent.core.work.WorkExecutorDependencies
+import co.sanaa.agent.core.work.WorkSource
+import co.sanaa.agent.core.work.AmaraWorkLoop
+import co.sanaa.agent.core.work.sources.WhatsAppFollowUpSource
+import co.sanaa.agent.core.work.sources.SokoWorkSource
+import co.sanaa.agent.core.work.sources.TikTokWorkSource
+import co.sanaa.agent.core.work.sources.JijiWorkSource
+import co.sanaa.agent.core.work.sources.InternalSource
+import co.sanaa.agent.core.market.JumiaScraper
 import co.sanaa.agent.integrations.DurableRevocationLedger
 import co.sanaa.agent.modules.*
 import co.sanaa.agent.notifications.NotificationReporter
@@ -23,10 +48,18 @@ import co.sanaa.agent.workflows.AmaraApprovalGateway
 import co.sanaa.agent.workflows.ContractScopedEvidence
 import co.sanaa.agent.workflows.TransactionRoutedEffects
 import co.sanaa.agent.workflows.DepartmentWorkflowExecutor
+import co.sanaa.agent.workers.ProactiveFollowUpWorker
+import co.sanaa.agent.workers.DailyBriefingWorker
+import co.sanaa.agent.workers.TikTokGrowthWorker
+import androidx.work.*
+import java.util.concurrent.TimeUnit
 
-class AgentRuntime private constructor(context: Context, useEncryptedPrefs: Boolean) {
+class AgentRuntime private constructor(private val context: Context, useEncryptedPrefs: Boolean) {
     val config = SecureConfig(context, useEncryptedPrefs = useEncryptedPrefs)
+    val groupSettings=co.sanaa.agent.modules.WhatsAppGroupSettings(context)
+    val evaluation = EvaluationJournal(context)
     val memory = AmaraMemory(context)
+    val chatStore = ChatStore(context)
     val backend = BackendSync(context, config, memory)
     val groq = GroqClient(config, memory)
     val soko = SokoApiClient(config)
@@ -35,7 +68,11 @@ class AgentRuntime private constructor(context: Context, useEncryptedPrefs: Bool
     val reporter = NotificationReporter(context)
     val verifier = ActionVerifier(actions, soko, backend)
     val queue = TaskQueue()
-    val sideEffects = SideEffectRunner(SideEffectLedger.from(memory))
+    val sideEffects = SideEffectRunner(SideEffectLedger.from(memory)).apply {
+        evaluationObserver = { status, capability, key ->
+            evaluation.record("external_effect", key, org.json.JSONObject().put("status", status).put("capability", capability))
+        }
+    }
     val targetVerifiers = TargetBoundVerifiers(actions)
 
     /** Keystore-backed vault for app-specific credentials (never the device unlock PIN). */
@@ -177,7 +214,7 @@ class AgentRuntime private constructor(context: Context, useEncryptedPrefs: Bool
         }
 
     val morning = MorningBroadcastModule(config, soko, groq, backend, actions, verifier, state, reporter, sideEffects, memory = memory)
-    val conversation = ConversationEngine(config, soko, groq, backend, actions, verifier, state, reporter, memory, queue, sideEffects, revenueIngestion = revenueOps.revenueIngestion)
+    val conversation = ConversationEngine(config, soko, groq, backend, actions, verifier, state, reporter, memory, queue, sideEffects, chatStore, revenueIngestion = revenueOps.revenueIngestion)
     val listing = ListingIntelligenceModule(config, soko, groq, backend, actions, verifier, state, reporter, sideEffects, memory)
     val followUp = FollowUpEngine(config, backend, actions, verifier, state, memory, groq, sideEffects)
     // Every Soko credential consumer shares ONE vault-backed authority: the pin
@@ -195,8 +232,143 @@ class AgentRuntime private constructor(context: Context, useEncryptedPrefs: Bool
     val sokoFull = SokoFullIntelligence(config, actions, memory, groq, pin = { sokoPin() }, credentialAudit = sokoCredentialAuditor)
     val sokoEdit = SokoEditModule(config, actions, memory)
     val visualListing = VisualListingIntelligence(groq, memory)
-    val tiktok = TikTokSkill(config, actions, memory, groq)
+    val tiktok = TikTokSkill(config, actions, memory, groq, socialLearning = { tikTokSocialStore.recentLearning().toString() })
     val health = AgentHealthMonitor(context, groq, backend, actions, state, reporter, memory = memory, retentionDays = { config.retentionDays })
+
+    // Hermes-inspired: SOUL.md (owner-editable personality)
+    val soulLoader = SoulLoader(context)
+    // Hermes-inspired: BoundedMemory (curated notes with hard limit)
+    val boundedMemory = BoundedMemory(context)
+    // Hermes-inspired: ContextLoader (per-task instruction files)
+    val contextLoader = ContextLoader(context)
+    // Hermes-inspired: SkillLoader (on-demand procedural knowledge)
+    val skillLoader = SkillLoader(context)
+    // Hermes-inspired: ModeManager (behavioral modes)
+    val modeManager = ModeManager()
+    // Jiji Market Intelligence
+    val marketDb = MarketDatabase(context)
+    val jijiScraper = JijiScraper(context, marketDb, actions)
+    val jumiaScraper = JumiaScraper(marketDb, actions, groq)
+    val marketAnalyzer = MarketAnalyzer(context, marketDb)
+    // Connectivity Monitor
+    val connectivityMonitor = ConnectivityMonitor(context)
+    // Device Self-Knowledge
+    val deviceSelfKnowledge = DeviceSelfKnowledge(context)
+    // Learning Loop
+    val learningDb = LearningDatabase(context)
+    val learningLoop = LearningLoop(context, learningDb)
+    val tikTokSocialStore = co.sanaa.agent.core.social.TikTokSocialStore(context)
+    val memoryBackup = co.sanaa.agent.core.memory.MemoryBackupManager(config, backend, chatStore, learningLoop, tikTokSocialStore)
+
+    // New modules — HumanConversationEngine, SokoCatalogModule
+    val humanConversation = HumanConversationEngine(config, groq, memory, chatStore, actions, sideEffects, reporter, co.sanaa.agent.modules.WhatsAppReplyStore(context), co.sanaa.agent.modules.ConversationKnowledge(context),
+        ownerContext = { contextLoader.loadAll(listOf("business", "whatsapp")) })
+    val sokoCatalog = SokoCatalogModule(actions, chatStore, pinProvider = { sokoPin() }, backend = soko)
+
+    // Self-directing autonomous work loop (AmaraWorkLoop)
+    val workQueue = WorkQueue(context)
+    val safetyGovernor = SafetyGovernor(context,
+        maxDailyScreenMinutes = { config.maxAgentScreenMinutesPerDay },
+        maxRetryCooldownMinutes = { config.maxRetryCooldownMinutes },
+    )
+    private val ownerPresenceMonitor = OwnerPresenceMonitor(context) { actions.snapshot().packageName }
+    private val phoneTimeBudgeter = PhoneTimeBudgeter(context) { config.maxAgentScreenMinutesPerDay }
+    private val workExecutor = WorkExecutor(
+        context = context,
+        sideEffects = sideEffects,
+        actions = actions,
+        dependencies = object : WorkExecutorDependencies {
+            override val sokoIntelligence get() = this@AgentRuntime.sokoIntelligence
+            override val tiktokSkill get() = this@AgentRuntime.tiktok
+            override val conversationEngine get() = this@AgentRuntime.conversation
+            override val humanConversation get() = this@AgentRuntime.humanConversation
+        },
+    )
+    val growthStore = co.sanaa.agent.core.growth.GrowthStore(context)
+    val tikTokCadence = co.sanaa.agent.core.work.TikTokCadence(context)
+    private val workSources: List<WorkSource> = listOf(
+        co.sanaa.agent.core.work.sources.WhatsAppGroupSource(
+            { config.whatsAppAutomationEnabled && config.whatsAppGroupsEnabled },
+            { contacts.listAll().filter { it.isGroup && groupSettings.allows(it,"promote") }.map { it.displayName }.distinct() },
+            intervalFor = { name -> contacts.listAll().filter { it.isGroup && it.displayName==name }.singleOrNull()?.let(groupSettings::interval) ?: 1440 },
+            nextDue = { name -> contacts.listAll().filter { it.isGroup && it.displayName==name }.singleOrNull()?.let(groupSettings::due) ?: Long.MAX_VALUE },
+        ),
+        WhatsAppFollowUpSource(chatStore, { config.whatsAppAutomationEnabled && config.whatsAppFollowUpsEnabled }, { config.whatsAppFollowUpDays }),
+        SokoWorkSource { config.sokoAutoSync || config.proactiveReadOnlyAudits },
+        TikTokWorkSource(
+            { config.tikTokTestMode }, { config.tikTokPostIntervalMinutes },
+            { config.tikTokAlwaysOn }, { config.tikTokCommentsEnabled },
+            { tikTokCadence.dueAt(config.tikTokPostIntervalMinutes) },
+        ),
+        JijiWorkSource(
+            jijiScraper, marketAnalyzer, jumiaScraper,
+            { config.jijiScrapingEnabled }, { config.jumiaIntelligenceEnabled }, { groq.visionConfigurationBlocker() == null },
+            { config.jijiScrapeIntervalHours },
+        ),
+        InternalSource(
+            { config.morningBroadcastEnabled },
+            { config.broadcastTime },
+            { config.configSyncEnabled },
+            { config.memoryBackupEnabled },
+        ),
+    )
+    val workLoop = AmaraWorkLoop(
+        queue = workQueue,
+        sources = workSources,
+        budgeter = phoneTimeBudgeter,
+        governor = safetyGovernor,
+        ownerMonitor = ownerPresenceMonitor,
+        executor = workExecutor,
+        executionBoundary = { block -> queue.withExclusiveDeviceAction { block() } },
+        onOutcome = { result ->
+            if(result.item.kind==co.sanaa.agent.core.work.WorkKind.WA_BROADCAST && result.item.payload.optString("group_target").isNotBlank()) {
+                contacts.listAll().filter { it.isGroup && it.displayName==result.item.payload.optString("group_target") }.singleOrNull()?.let {
+                    if(result.status!=co.sanaa.agent.core.work.WorkStatus.SKIPPED) groupSettings.outcome(it,result.status.name,result.failure?.summary.orEmpty())
+                }
+            }
+            if (result.item.kind == co.sanaa.agent.core.work.WorkKind.WA_REPLY_INBOUND) {
+                growthStore.recordReply(result.item.dedupeKey, result.item.payload.optLong("inbound_observed_at"), result.status.name)
+            }
+
+            if (result.item.kind == co.sanaa.agent.core.work.WorkKind.TIKTOK_POST_PUBLISH) {
+                if (result.status == co.sanaa.agent.core.work.WorkStatus.DONE ||
+                    result.status == co.sanaa.agent.core.work.WorkStatus.ESCALATED ||
+                    workExecutor.decideRecovery(result.item,result,result.item.attempt+1) !is co.sanaa.agent.core.work.RecoveryDecision.Requeue)
+                    tikTokCadence.finishOpportunity(result.item.dedupeKey, config.tikTokPostIntervalMinutes,
+                        verified = result.status == co.sanaa.agent.core.work.WorkStatus.DONE)
+            }
+            learningLoop.recordAction(
+                actionType = result.item.kind.name,
+                domain = result.item.domain.name,
+                success = result.status == co.sanaa.agent.core.work.WorkStatus.DONE,
+                details = result.outcomeFacts.joinToString("; "),
+                error = result.failure?.summary,
+                screenSeconds = result.screenSecondsUsed,
+            )
+            learningLoop.recordSkillPerformance(
+                result.item.kind.name,
+                result.status == co.sanaa.agent.core.work.WorkStatus.DONE,
+                result.screenSecondsUsed,
+            )
+            learningLoop.observeOutcome(
+                result.item.kind.name,
+                result.status == co.sanaa.agent.core.work.WorkStatus.DONE,
+            )
+        },
+        quietHoursStart = { config.quietHoursStart },
+        quietHoursEnd = { config.quietHoursEnd },
+        learnedTimeFactor = { kind, hour -> learningLoop.scoreFactor(kind.name, hour) },
+        onReport = { report ->
+            android.util.Log.i("AgentRuntime", "Work session report: ${report.summary}")
+        },
+        onEscalation = { item, reason ->
+            reporter.report(
+                "Amara work needs attention",
+                "${item.kind.name}: $reason",
+                co.sanaa.agent.notifications.NotificationReporter.Priority.ACTION_NEEDED,
+            )
+        },
+    )
 
     private val readyDeferred: kotlinx.coroutines.CompletableDeferred<AgentRuntime> =
         kotlinx.coroutines.CompletableDeferred()
@@ -223,11 +395,139 @@ class AgentRuntime private constructor(context: Context, useEncryptedPrefs: Bool
                 runCatching { contacts.scrubSecrets() }
                     .onFailure { android.util.Log.w("AgentRuntime", "Contact directory secret scrub failed: ${it.message}") }
                 co.sanaa.agent.core.ContactDirectoryProvider.instance = contacts
+                scheduleProactiveWorkers()
+                // Initialize new modules (creates databases)
+                initializeNewModules()
+                if (config.memoryBackupEnabled && config.memoryAutoRestoreEnabled && chatStore.summaryCount() == 0) {
+                    runCatching { memoryBackup.restoreLatest() }
+                        .onFailure { android.util.Log.w("AgentRuntime", "Memory restore deferred: ${it.message}") }
+                }
+                startWorkLoop()
                 readyDeferred.complete(this@AgentRuntime)
             } catch (t: Throwable) {
                 readyDeferred.completeExceptionally(t)
             }
         }
+    }
+
+    /**
+     * Schedule proactive workers for follow-up and daily briefing.
+     * These run periodically to keep conversations moving.
+     */
+    private fun scheduleProactiveWorkers() {
+        // WorkManager may not be available in test environments (Robolectric).
+        // Wrap in try-catch so tests don't fail.
+        try {
+            val workManager = WorkManager.getInstance(context)
+            val networkConstraint = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+
+            // Proactive follow-up: every 6 hours
+            val followUpRequest = PeriodicWorkRequestBuilder<ProactiveFollowUpWorker>(6, TimeUnit.HOURS)
+                .setConstraints(networkConstraint)
+                .addTag("proactive_followup")
+                .build()
+            workManager.enqueueUniquePeriodicWork(
+                "proactive_followup",
+                ExistingPeriodicWorkPolicy.KEEP,
+                followUpRequest
+            )
+
+            // Daily briefing: every 24 hours
+            val dailyBriefingRequest = PeriodicWorkRequestBuilder<DailyBriefingWorker>(24, TimeUnit.HOURS)
+                .setConstraints(networkConstraint)
+                .addTag("daily_briefing")
+                .build()
+            workManager.enqueueUniquePeriodicWork(
+                "daily_briefing",
+                ExistingPeriodicWorkPolicy.KEEP,
+                dailyBriefingRequest
+            )
+
+            // TikTok test mode: every 10 minutes (for testing)
+            if (config.tikTokTestMode) {
+                co.sanaa.agent.workers.AgentWorkScheduler.scheduleTikTokTest(context)
+                android.util.Log.i("AgentRuntime", "TikTok test mode enabled - posting every 10 minutes")
+            } else {
+                workManager.cancelUniqueWork(TikTokGrowthWorker.TAG)
+            }
+
+            android.util.Log.i("AgentRuntime", "Proactive workers scheduled")
+        } catch (e: Exception) {
+            // WorkManager not initialized (e.g., in Robolectric tests).
+            // On a real device this will succeed during app startup.
+            android.util.Log.w("AgentRuntime", "Could not schedule proactive workers: ${e.message}")
+        }
+    }
+
+    /**
+     * Initialize new modules (creates databases, loads files).
+     */
+    private fun initializeNewModules() {
+        // Touch databases to create them
+        marketDb.writableDatabase
+        workQueue.pendingCount() // triggers DB creation
+        workQueue.cancelPendingOwnerCanaries()
+        workQueue.compactPendingBacklog()
+        if (!config.whatsAppAutomationEnabled) {
+            workQueue.cancelPending(setOf(
+                co.sanaa.agent.core.work.WorkKind.WA_REPLY_INBOUND,
+                co.sanaa.agent.core.work.WorkKind.WA_FOLLOWUP,
+                co.sanaa.agent.core.work.WorkKind.WA_BROADCAST,
+            ))
+        } else {
+            if (!config.whatsAppInboundEnabled) {
+                workQueue.cancelPending(setOf(co.sanaa.agent.core.work.WorkKind.WA_REPLY_INBOUND))
+            }
+            if (!config.whatsAppFollowUpsEnabled) {
+                workQueue.cancelPending(setOf(co.sanaa.agent.core.work.WorkKind.WA_FOLLOWUP))
+            }
+        }
+        if (!config.tikTokTestMode) {
+            workQueue.cancelPending(setOf(
+                co.sanaa.agent.core.work.WorkKind.TIKTOK_POST_PUBLISH,
+                co.sanaa.agent.core.work.WorkKind.TIKTOK_COMMENT_REPLY,
+                co.sanaa.agent.core.work.WorkKind.TIKTOK_ANALYTICS_CHECK,
+            ))
+        }
+        safetyGovernor.getState() // triggers DB creation
+        learningDb.writableDatabase // triggers learning DB creation
+        // Load SOUL (creates default if not exists)
+        soulLoader.load()
+        // Build device map (creates default)
+        deviceSelfKnowledge.load()
+        skillLoader.installBundledIfMissing("soko-tiktok-growth", "skills/soko-tiktok-growth.md")
+        groq.setRuntimeContextProvider {
+            val mode = modeManager.currentMode
+            listOf(
+                soulLoader.load(),
+                "CURRENT MODE: ${mode.displayName}\n${mode.promptOverlay()}",
+                boundedMemory.load(),
+                contextLoader.load(mode.name.lowercase()),
+                skillLoader.load(mode.name.lowercase()).orEmpty(),
+                if (mode == co.sanaa.agent.core.mode.AmaraMode.CONTENT_CREATOR)
+                    skillLoader.load("soko-tiktok-growth").orEmpty() else "",
+            ).filter(String::isNotBlank).joinToString("\n\n")
+        }
+        // Log improvement
+        learningLoop.logImprovement(
+            component = "SYSTEM",
+            changeType = "INIT",
+            oldValue = null,
+            newValue = "New modules initialized",
+            reason = "App startup",
+            triggeredBy = "system"
+        )
+        android.util.Log.i("AgentRuntime", "New modules initialized")
+    }
+    private fun startWorkLoop() {
+        initScope.launch {
+            try {
+                workLoop.run(this)
+            } catch (e: Exception) {
+                android.util.Log.e("AgentRuntime", "Work loop crashed", e)
+            }
+        }
+        workLoop.wake(co.sanaa.agent.core.work.WakeReason.ScheduledAlarm)
     }
 
     /**

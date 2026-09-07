@@ -228,9 +228,9 @@ class SokoCredentialRoutingTest {
         full.readAlerts()
         full.fullShopReport()
 
-        // The alerts section (inside the shop report too) drew its material from
-        // the injected vault authority, twice, and nothing else ever produced a PIN.
-        assertEquals(listOf(SENTINEL_PIN, SENTINEL_PIN), released)
+        // Alerts twice and the checked product inventory path each request their
+        // credential from the same vault. No section may use a config copy.
+        assertEquals(listOf(SENTINEL_PIN, SENTINEL_PIN, SENTINEL_PIN), released)
         assertEquals("", config.sokoTerminalPin)
     }
 

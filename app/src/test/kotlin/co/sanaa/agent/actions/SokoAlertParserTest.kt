@@ -15,5 +15,6 @@ class SokoAlertParserTest {
         )
         assertEquals(listOf("Order", "Low stock", "Booking"), alerts.map(SokoAlert::type))
         assertEquals("Customer", alerts.first().detail)
+        assertEquals("Shiny Printer R-532D Self-Inking Round Date Stamp", alerts[1].subject)
     }
 }

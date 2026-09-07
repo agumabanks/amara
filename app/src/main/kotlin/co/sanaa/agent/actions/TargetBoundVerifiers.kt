@@ -76,24 +76,23 @@ object SendVerificationLogic {
         }
         if (!observation.contentVisibleOutsideDraft) {
             return VerificationEvidence.impossible(
-                "$NO_EFFECT_PROVEN: the message content was not found as a sent bubble in the target chat.",
+                "The message bubble is not visible in this observation; delivery remains uncertain.",
                 observation.observedPackage,
             )
         }
-        return when (observation.deliveryState) {
-            null -> VerificationEvidence(
+        return when (observation.deliveryState?.lowercase()) {
+            "sent", "delivered", "read" -> VerificationEvidence(
+                verified = true, confidence = if(observation.deliveryState.equals("sent",true)) 0.85 else 0.95,
+                observedPackage = observation.observedPackage, deliveryState = observation.deliveryState,
+                evidenceTimestamp = observation.observedAtMs,
+            )
+            else -> VerificationEvidence(
                 verified = false, confidence = 0.4,
                 observedPackage = observation.observedPackage, deliveryState = null,
                 evidenceTimestamp = observation.observedAtMs,
                 blocker = "Content is present in the target chat, but no delivery tick/state could be read, so the send cannot be proven yet.",
             )
-            else -> VerificationEvidence(
-                verified = true,
-                confidence = if (observation.deliveryState.equals("sent", true)) 0.85 else 0.95,
-                observedPackage = observation.observedPackage,
-                deliveryState = observation.deliveryState,
-                evidenceTimestamp = observation.observedAtMs,
-            )
+
         }
     }
 
@@ -221,14 +220,40 @@ class TargetBoundVerifiers(private val actions: AccessibilityActions) {
         ) { evaluatePublication(actions.snapshot(), content, "WhatsApp Status", PublicationSurfaces.WHATSAPP_PACKAGE) }
     }
 
-    suspend fun verifyTikTokPost(caption: String): VerificationEvidence =
-        pollPublication(
-            caption, "TikTok post", PublicationSurfaces.TIKTOK_PACKAGE,
-        ) { evaluatePublication(actions.snapshot(), caption, "TikTok post", PublicationSurfaces.TIKTOK_PACKAGE) }
+    suspend fun verifyTikTokPost(caption: String): VerificationEvidence {
+        // TikTok commonly returns to Home after accepting Post. Text on Home cannot
+        // prove our publication, so reopen the signed-in profile's newest grid item
+        // and bind verification to the exact caption on that post.
+        kotlinx.coroutines.delay(3_000)
+        evaluatePublication(actions.snapshot(), caption, "TikTok post", PublicationSurfaces.TIKTOK_PACKAGE)
+            .takeIf { it.verified }?.let { return it }
+        if (!actions.openLatestTikTokPost()) {
+            return VerificationEvidence.impossible(
+                "TikTok accepted the publish tap, but the newest profile post could not be opened for caption verification.",
+                actions.snapshot().packageName,
+            )
+        }
+        return pollPublication(
+            caption, "newest TikTok profile post", PublicationSurfaces.TIKTOK_PACKAGE,
+        ) { evaluatePublication(actions.snapshot(), caption, "newest TikTok profile post", PublicationSurfaces.TIKTOK_PACKAGE) }
+    }
 
     suspend fun evaluateCurrentChat(target: String, content: String, preState: ChatPreState? = null): VerificationEvidence {
-        val evidence = evaluateChatSnapshot(actions.snapshot(), actions.observeMessageNodes(content), target, content)
-        return applyStalenessRule(evidence, content, preState)
+        var evidence = VerificationEvidence.impossible("Awaiting target-bound reply evidence")
+        val deadline = android.os.SystemClock.elapsedRealtime() + 12_000L
+        do {
+            val snapshot = actions.snapshot()
+            val facts = actions.observeMessageNodes(content)
+            evidence = if (!actions.isExactWhatsAppConversation(target))
+                VerificationEvidence.impossible("Exact conversation header/composer unavailable", snapshot.packageName)
+            else SendVerificationLogic.evaluate(content, SendObservation(snapshot.packageName,
+                PublicationSurfaces.WHATSAPP_PACKAGE, true, facts.inReadOnlyBubble,
+                facts.onlyInsideEditableField, facts.deliveryState, System.currentTimeMillis()))
+            evidence = applyStalenessRule(evidence, content, preState)
+            if (evidence.verified) return evidence
+            kotlinx.coroutines.delay(300)
+        } while (android.os.SystemClock.elapsedRealtime() < deadline)
+        return evidence
     }
 
     /**

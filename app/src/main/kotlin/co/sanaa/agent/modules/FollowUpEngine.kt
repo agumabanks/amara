@@ -43,7 +43,9 @@ class FollowUpEngine(
             }
             // Per-candidate isolation: one model or read failure must never abort the run;
             // the remaining candidates still get their honest chance.
-            val context = try { actions.readWhatsAppConversation(candidate.contact, 3) } catch (error: Exception) { null }
+            val context = try { actions.readWhatsAppConversation(candidate.contact, 3) } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+ null }
             if (context == null) {
                 recordCandidateFailure(candidate.contact,
                     cause = "conversation unreadable",
@@ -114,6 +116,8 @@ class FollowUpEngine(
                     verify = { TargetBoundVerifiers(actions).evaluateCurrentChat(candidate.contact, reply) },
                 )
             } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+
                 recordCandidateFailure(candidate.contact,
                     cause = error.message ?: "transaction error", disposition = "UNCERTAIN_EXTERNAL_EFFECT", stage = STAGE_SEND)
                 failedAttempts += "${candidate.contact}: transaction error"
@@ -181,6 +185,8 @@ class FollowUpEngine(
     private suspend fun <T> modelCall(block: suspend () -> T): ModelCall<T> = try {
         ModelCall.Success(block())
     } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+
         // Typed gateway failures isolate to the current candidate and never abort the run.
         when (error) {
             is co.sanaa.agent.api.ModelResponseException,

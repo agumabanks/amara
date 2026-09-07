@@ -55,7 +55,7 @@ class FakeDeviceSurface : WorkflowDeviceSurface {
             override suspend fun sendInCurrentChat(message: String): Boolean = record(message)
             override suspend fun postWhatsAppTextStatus(message: String): Boolean = record(message)
             override suspend fun postWhatsAppMediaStatus(uri: android.net.Uri, mimeType: String, caption: String): Boolean = record(caption)
-            override suspend fun postTikTok(imageUrl: String, caption: String, publish: Boolean): Boolean = record(caption)
+            override suspend fun postTikTok(imageUrl: String, caption: String, publish: Boolean, mediaBindingKey: String): Boolean = record(caption)
             override suspend fun updateSokoListing(currentTitle: String, newTitle: String, newDescription: String): Boolean = record(newTitle)
             override suspend fun saveEditForm(): Boolean = record("Update Product")
             override fun setFirstEditable(text: String): Boolean = record(text)
