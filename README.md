@@ -45,3 +45,4 @@ The debug APK is intentionally large because Flutter includes JIT debugging asse
 Install with ADB, open the app, and complete each setup card. In ColorOS also open **Settings → Apps → App management → Sanaa Agent → Battery usage** and allow background activity/autostart if those switches are present. Menu wording varies by ColorOS version, so the app always opens the standard Android settings screen instead of relying on an undocumented Oppo component.
 
 No Groq key is present in the repository or APK. Enter it during onboarding and use the connection icon to verify the model before starting Amara.
+# amara
