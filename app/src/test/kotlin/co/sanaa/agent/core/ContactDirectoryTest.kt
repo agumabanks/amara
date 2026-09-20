@@ -41,6 +41,22 @@ class ContactDirectoryTest {
         whatsappSurfaceEvidence = null, revocationEvidence = null,
     )
 
+    @Test fun groupPhoneDigitsSurviveScrubAndExactLegacyRestorationPreservesAuthority() {
+        val original = "Electronics 0700123456/0700654321"
+        val saved = store.upsert(entry(original, isGroup = true, level = ContactPermission.MONITOR, id = "wa-origin:123456789012"))
+        store.scrubSecrets()
+        assertEquals(original, store.byId(saved.id)?.displayName)
+        store.upsert(saved.copy(displayName = Redactor.redact(original)))
+        assertEquals(0, store.restoreScrubbedGroupNames(org.json.JSONArray(listOf("Other 0700123456")).toString()))
+        assertEquals(1, store.restoreScrubbedGroupNames(org.json.JSONArray(listOf(original)).toString()))
+        assertEquals(original, store.byId(saved.id)?.displayName)
+        assertFalse(store.byId(saved.id)!!.canSend)
+        assertEquals(0, store.restoreScrubbedGroupNames(org.json.JSONArray(listOf(original)).toString()))
+        val secret = store.upsert(entry("Group PIN 123456", isGroup = true))
+        store.scrubSecrets()
+        assertFalse(store.byId(secret.id)!!.displayName.contains("123456"))
+    }
+
     @Before
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
@@ -159,6 +175,27 @@ class ContactDirectoryTest {
         assertTrue(store.authorizeLevel(saved.id, ContactPermission.FULL))
         val full = requireNotNull(store.byId(saved.id))
         assertTrue(full.canMonitor && full.canReply && full.canSend && full.canWrite)
+    }
+
+    @Test
+    fun `contact refresh cannot undo an owner restriction but explicit reauthorization can`() {
+        val saved = store.upsert(entry("Restricted customer", "0772000026", level = ContactPermission.FULL))
+        store.setPermission(saved.id, Operation.REPLY, false)
+        val refreshed = store.upsert(entry("Restricted customer", "0772000026", level = ContactPermission.FULL))
+        assertEquals(saved.id, refreshed.id)
+        assertEquals(Permission.DENY, refreshed.permissions[Operation.REPLY])
+        assertTrue(refreshed.canMonitor)
+        assertFalse(refreshed.canReply)
+        assertTrue(store.authorizeLevel(saved.id, ContactPermission.REPLY))
+        assertTrue(requireNotNull(store.byId(saved.id)).canReply)
+    }
+
+    @Test
+    fun `incoming explicit restriction survives an existing grant`() {
+        val saved = store.upsert(entry("Restricted group", isGroup = true, level = ContactPermission.FULL))
+        val refreshed = store.upsert(saved.copy(permissions = saved.permissions + (Operation.SEND to Permission.DENY)))
+        assertEquals(Permission.DENY, refreshed.permissions[Operation.SEND])
+        assertFalse(refreshed.canSend)
     }
 
     @Test

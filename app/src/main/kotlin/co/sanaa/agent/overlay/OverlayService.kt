@@ -31,10 +31,9 @@ import co.sanaa.agent.core.WorkStatus
 import co.sanaa.agent.services.AccessibilityAgentService
 
 /**
- * Observational status chip. It never intercepts touches while automation is acting,
- * never dismisses the keyguard, and exposes no on-chip emergency controls — stopping
- * happens exclusively through [requestStop], which the persistent notification action
- * calls; the service polls the flag on every tick.
+ * Compact companion with owner controls while idle. It does not intercept touches
+ * during external actions or on the keyguard; owner power is durable and separate
+ * from hiding the companion.
  */
 class OverlayService : Service() {
     private var overlayView: View? = null
@@ -128,6 +127,7 @@ class OverlayService : Service() {
                 addViewCalls++
                 windowManager?.addView(view, params)
                 overlayView = view
+                addGestureSupport(view)
                 // Align once the view has been measured (width is 0 straight after addView).
                 mainHandler.postDelayed({ rightAlignChip() }, FIRST_LAYOUT_ALIGN_DELAY_MS)
                 val container = view.findViewById<View>(R.id.overlay_card)
@@ -206,19 +206,34 @@ class OverlayService : Service() {
             maxWidth = textBudget
             maxLines = 1
         }
+        val panel = view.findViewById<LinearLayout>(R.id.overlay_expanded)
+        fun control(label: String, action: () -> Unit) {
+            panel?.addView(android.widget.Button(this).apply {
+                text = label
+                setOnClickListener { action() }
+            })
+        }
+        control("Open Amara status") {
+            startActivity(Intent(this, co.sanaa.agent.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+        control("Turn Amara off") {
+            co.sanaa.agent.core.OwnerPower(this).setOn(false)
+            renderLatest()
+        }
+        control("Hide companion") { stopSelf() }
         return view
     }
 
     /** Flags are pure so the acting/keyguard touch policy is unit-testable. */
     internal fun baseFlags(): Int =
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
 
     /** The overlay is observational in every phase; it can never intercept app input. */
     internal fun flagsFor(base: Int, acting: Boolean): Int =
-        base or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        if (acting || keyguardLocked()) base or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        else base and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
 
     internal fun currentLayoutParams(): WindowManager.LayoutParams? = params
 
@@ -385,15 +400,16 @@ class OverlayService : Service() {
 
         // Exactly one compact chip during automation: the expanded detail panel can
         // never be visible while the agent works or acts — it collapses immediately.
-        if ((working || chip.acting) && expanded) {
+        val activelyMoving = working && chip.phase !in setOf(RuntimePhase.BLOCKED, RuntimePhase.FAILED, RuntimePhase.COMPLETE)
+        if ((activelyMoving || chip.acting) && expanded) {
             expanded = false
             expandedPanel?.visibility = View.GONE
             mainHandler.postDelayed({ rightAlignChip() }, FIRST_LAYOUT_ALIGN_DELAY_MS)
         }
 
-        phaseView.text = phaseLabel
-        detailView.text = compactDetail
-        expandedPhase?.text = phaseLabel
+        phaseView.text = if (!co.sanaa.agent.core.OwnerPower(this).isOn()) "Off" else phaseLabel
+        detailView.text = if (!co.sanaa.agent.core.OwnerPower(this).isOn()) "Work held by owner" else compactDetail
+        expandedPhase?.text = if (!co.sanaa.agent.core.OwnerPower(this).isOn()) "Off — work held" else phaseLabel
         expandedDetail?.text = if (keyguardLocked) "" else expandedDetailText(chip.status)
         if (keyguardLocked && expanded) {
             expanded = false
@@ -479,6 +495,7 @@ class OverlayService : Service() {
     }
 
     private fun startPulse(pulseView: View, color: Int) {
+        if (Build.VERSION.SDK_INT >= 26 && !ValueAnimator.areAnimatorsEnabled()) { stopPulse(); return }
         pulseView.setBackgroundColor(color)
         pulseActive = true
         val animator = pulseAnimator ?: ValueAnimator.ofFloat(0.4f, 1f).apply {

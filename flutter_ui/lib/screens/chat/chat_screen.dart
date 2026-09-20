@@ -1,3 +1,4 @@
+import '../doctor/doctor_screen.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -19,6 +20,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   String _phase = 'idle';
   String _phaseDetail = 'Ready for the next thing';
   Map<String, dynamic>? _lastReceipt;
+  Map<String, dynamic>? _operationalHealth;
   bool _busy = false;
   bool _showScrollButton = false;
   bool _typing = false;
@@ -30,10 +32,11 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     super.initState();
     _historyReady = _restoreHistory();
     _restoreRuntimeStatus();
-    _statusTimer = Timer.periodic(
-      const Duration(seconds: 3),
-      (_) => _restoreRuntimeStatus(),
-    );
+    _restoreOperationalHealth();
+    _statusTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _restoreRuntimeStatus();
+      _restoreOperationalHealth();
+    });
     _scroll.addListener(_onScroll);
     final initial = widget.initialMessage;
     if (initial != null && initial.isNotEmpty) {
@@ -42,6 +45,38 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         _input.text = initial;
         _input.selection = TextSelection.collapsed(offset: initial.length);
       });
+    }
+  }
+
+  Future<void> _restoreOperationalHealth() async {
+    try {
+      final value = await AgentChannel.operationalHealth();
+      if (mounted) setState(() => _operationalHealth = value);
+    } on PlatformException {
+      // Status polling must not prevent the owner from using chat.
+    }
+  }
+
+  Future<void> _runHealthCheck() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final value = await AgentChannel.runOperationalHealth();
+      if (!mounted) return;
+      setState(() {
+        _operationalHealth = value['health'] as Map<String, dynamic>?;
+        _messages.add(
+          _ChatMessage.amara(
+            value['summary']?.toString() ?? 'Health check completed.',
+            time: DateTime.now(),
+          ),
+        );
+      });
+      _goToLatest();
+    } on PlatformException {
+      // The next normal refresh will show the last confirmed device state.
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -507,6 +542,11 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       children: [
         if (_busy)
           _ProcessRail(phase: _phase, detail: _phaseDetail, onStop: _stop),
+        if (_operationalHealth != null)
+          _OperationalHealthCard(
+            data: _operationalHealth!,
+            onRefresh: _busy ? null : _runHealthCheck,
+          ),
         Expanded(
           child: Stack(
             children: [
@@ -573,6 +613,86 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     }
     if (_typing) widgets.add(_TypingIndicator());
     return widgets;
+  }
+}
+
+class _OperationalHealthCard extends StatelessWidget {
+  const _OperationalHealthCard({required this.data, required this.onRefresh});
+  final Map<String, dynamic> data;
+  final VoidCallback? onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final healthy = data['healthy'] == true;
+    final blockers = (data['blockers'] as List? ?? const [])
+        .map((item) => item.toString())
+        .toList();
+    final loop = data['loop'] as Map?;
+    final activity = loop?['lastSummary']?.toString() ?? '';
+    final battery = data['batteryPercent']?.toString() ?? '—';
+    final network = data['network']?.toString() ?? 'Unknown';
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: healthy ? const Color(0xFF10231F) : const Color(0xFF2A1B14),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: healthy ? const Color(0xFF2D806D) : const Color(0xFFF97316),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            healthy ? Icons.verified_outlined : Icons.warning_amber_rounded,
+            color: healthy ? const Color(0xFF50E3C2) : const Color(0xFFF97316),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  healthy ? 'Amara is ready' : 'Amara needs attention',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  blockers.isEmpty
+                      ? '$network · Battery $battery%\n$activity'
+                      : blockers.first,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+                if (blockers.length > 1)
+                  Text(
+                    '${blockers.length} issues · open Doctor to review',
+                    style: const TextStyle(color: Colors.white54, fontSize: 11),
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Open Doctor and fixes',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DoctorScreen()),
+            ),
+            icon: const Icon(Icons.build_circle_outlined),
+          ),
+          IconButton(
+            tooltip: 'Run health check',
+            onPressed: onRefresh,
+            icon: const Icon(Icons.refresh, color: Color(0xFF50E3C2)),
+          ),
+        ],
+      ),
+    );
   }
 }
 

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <queries>
+        <package android:name="com.google.android.youtube" />
         <package android:name="com.whatsapp" />
         <package android:name="com.zhiliaoapp.musically" />
         <package android:name="co.soko24.terminal" />
@@ -25,6 +26,7 @@
          WhatsApp attachment transaction. Android 13+ uses the scoped media reader;
          older builds use the legacy storage read. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -44,6 +46,12 @@
             android:name="io.flutter.embedding.android.EnableImpeller"
             android:value="false" />
 
+        <activity
+            android:name=".core.WorkUnlockActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"

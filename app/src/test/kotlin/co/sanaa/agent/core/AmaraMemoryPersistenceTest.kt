@@ -2,6 +2,7 @@ package co.sanaa.agent.core
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.sqlite.SQLiteConstraintException
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
@@ -121,6 +122,73 @@ class AmaraMemoryPersistenceTest {
             status TEXT NOT NULL CHECK(status IN ('started','verified','failed','uncertain')),
             evidence TEXT NOT NULL DEFAULT '')""")
         db.version = 5
+    }
+
+    @Test fun queuedInstructionRemainsPendingOnLegacySchemaWithoutLosingHistory() {
+        memory.close()
+        val legacySql = SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(AmaraMemory.DATABASE_NAME).path, null).use { db ->
+            createLegacyV5Schema(db)
+            db.execSQL("INSERT INTO owner_instructions (id, timestamp, instruction_text, status, recurrence_rule) VALUES (41, 123, 'Check bookings daily', 'recurring', 'daily')")
+            db.rawQuery("SELECT sql FROM sqlite_master WHERE name = 'owner_instructions'", null).use {
+                assertTrue(it.moveToFirst())
+                it.getString(0)
+            }
+        }
+        AmaraMemory(context).use { migrated ->
+            val id = migrated.recordInstruction("Post a Soko product on TikTok")
+            assertTrue(id > 41)
+            migrated.updateInstruction(id, "queued")
+            migrated.readableDatabase.rawQuery("SELECT status FROM owner_instructions WHERE id = ?", arrayOf(id.toString())).use {
+                assertTrue(it.moveToFirst())
+                assertEquals("pending", it.getString(0))
+            }
+        }
+        AmaraMemory(context).use { reopened ->
+            reopened.readableDatabase.rawQuery("SELECT id, timestamp, instruction_text, status, recurrence_rule FROM owner_instructions ORDER BY id", null).use {
+                assertTrue(it.moveToFirst())
+                assertEquals(41L, it.getLong(0))
+                assertEquals(123L, it.getLong(1))
+                assertEquals("Check bookings daily", it.getString(2))
+                assertEquals("recurring", it.getString(3))
+                assertEquals("daily", it.getString(4))
+                assertTrue(it.moveToNext())
+                assertEquals("Post a Soko product on TikTok", it.getString(2))
+                assertEquals("pending", it.getString(3))
+                assertFalse(it.moveToNext())
+            }
+            reopened.readableDatabase.rawQuery("SELECT sql FROM sqlite_master WHERE name = 'owner_instructions'", null).use {
+                assertTrue(it.moveToFirst())
+                assertEquals(legacySql, it.getString(0))
+            }
+        }
+    }
+
+    @Test fun freshInstructionWritesKeepQueuedPendingAndPreserveSupportedStates() {
+        val id = memory.recordInstruction("Post a Soko product on TikTok", "queued")
+        fun storedStatus() = memory.readableDatabase.rawQuery(
+            "SELECT status FROM owner_instructions WHERE id = ?", arrayOf(id.toString()),
+        ).use { assertTrue(it.moveToFirst()); it.getString(0) }
+        assertEquals("pending", storedStatus())
+        for (status in listOf("done", "recurring", "pending")) {
+            memory.updateInstruction(id, status)
+            assertEquals(status, storedStatus())
+        }
+        memory.updateInstruction(id, "queued")
+        assertEquals("pending", storedStatus())
+    }
+
+    @Test fun unknownInstructionStatusesStillFailClosed() {
+        val id = memory.recordInstruction("Keep this instruction")
+        val insertError = runCatching { memory.recordInstruction("Invalid", "approved") }.exceptionOrNull()
+        assertTrue(insertError is SQLiteConstraintException)
+        val updateError = runCatching { memory.updateInstruction(id, "approved") }.exceptionOrNull()
+        assertTrue(updateError is SQLiteConstraintException)
+        memory.readableDatabase.rawQuery("SELECT instruction_text, status FROM owner_instructions", null).use {
+            assertTrue(it.moveToFirst())
+            assertEquals("Keep this instruction", it.getString(0))
+            assertEquals("pending", it.getString(1))
+            assertFalse(it.moveToNext())
+        }
     }
 
     @Test fun migrationFromV5CreatesTransactionAndWorkflowTablesAndPreservesApprovals() {

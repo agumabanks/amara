@@ -17,6 +17,7 @@ object SecretScrubber {
     /** Columns whose values are phone/key identity, not free text. */
     private val IDENTITY_COLUMN_HINTS = listOf(
         "normalized_phone", "contact_number", "contact_key", "aliases_json", "phone",
+        "idempotency_key", "content_hash",
     )
 
     /** Applied to the whole database; returns the number of scrubbed cells. */
@@ -69,7 +70,8 @@ object SecretScrubber {
                     val name = cursor.getString(cursor.getColumnIndexOrThrow("name"))
                     val type = cursor.getString(cursor.getColumnIndexOrThrow("type")).uppercase()
                     if ("TEXT" in type || "VARCHAR" in type || "CLOB" in type) {
-                        add(name to IDENTITY_COLUMN_HINTS.any { hint -> name.contains(hint, ignoreCase = true) })
+                        add(name to ((table == "contacts" && name in setOf("id", "display_name")) ||
+                            IDENTITY_COLUMN_HINTS.any { hint -> name.contains(hint, ignoreCase = true) }))
                     }
                 }
             }

@@ -60,6 +60,10 @@ class SokoWorkSource(private val enabled: () -> Boolean = { true }) : WorkSource
         if (!enabled() || !snapshot.networkAvailable) return emptyList()
 
         val items = mutableListOf<WorkItem>()
+        items.add(WorkItem(dedupeKey="manager-orders-${System.currentTimeMillis()/(15*60_000L)}",
+            domain=Domain.INTERNAL,kind=WorkKind.MARKET_ANALYSIS,payload=org.json.JSONObject().put("manager_orders",true),
+            baseValueKes=220.0,urgencyHalfLifeHours=0.5,estimatedScreenSeconds=0,requires=setOf(Capability.NETWORK)))
+
 
         // Propose an audit every 4 hours
         val lastAuditKey = "soko-audit-${System.currentTimeMillis() / (4 * 3600000)}"
@@ -102,6 +106,8 @@ class TikTokWorkSource(
     private val alwaysOn: () -> Boolean = { false },
     private val commentsEnabled: () -> Boolean = { true },
     private val nextPostAt: (() -> Long)? = null,
+    private val ownerClosed: (String) -> Boolean = { false },
+    private val skipOwnerClosedOpportunity: (String, Long) -> Unit = { _, _ -> },
 ) : WorkSource {
 
     override val domain: Domain = Domain.TIKTOK
@@ -136,6 +142,13 @@ class TikTokWorkSource(
             if (due != null && System.currentTimeMillis() < due) return items
             val postKey = due?.let { "tiktok-due-$it" }
                 ?: "tiktok-post-${System.currentTimeMillis() / intervalMs}"
+            // WorkQueue deliberately retains an owner-closed entry as evidence.
+            // Without advancing the cadence, that same key is deduped forever and
+            // the scheduler wakes on time but can never enqueue another post.
+            if (due != null && ownerClosed(postKey)) {
+                skipOwnerClosedOpportunity(postKey, intervalMinutes())
+                return items
+            }
             items.add(WorkItem(
                 dedupeKey = postKey,
                 domain = Domain.TIKTOK,

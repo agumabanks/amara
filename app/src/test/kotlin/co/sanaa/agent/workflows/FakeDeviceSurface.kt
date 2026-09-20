@@ -55,6 +55,8 @@ class FakeDeviceSurface : WorkflowDeviceSurface {
             override suspend fun sendInCurrentChat(message: String): Boolean = record(message)
             override suspend fun postWhatsAppTextStatus(message: String): Boolean = record(message)
             override suspend fun postWhatsAppMediaStatus(uri: android.net.Uri, mimeType: String, caption: String): Boolean = record(caption)
+            override suspend fun publishYouTubeShort(channel: String, title: String, description: String): Boolean = record(title)
+            override suspend fun postTikTokStory(imageUrl: String, caption: String, mediaBindingKey: String): Boolean = record(caption)
             override suspend fun postTikTok(imageUrl: String, caption: String, publish: Boolean, mediaBindingKey: String): Boolean = record(caption)
             override suspend fun updateSokoListing(currentTitle: String, newTitle: String, newDescription: String): Boolean = record(newTitle)
             override suspend fun saveEditForm(): Boolean = record("Update Product")
@@ -92,6 +94,12 @@ class FakeDeviceSurface : WorkflowDeviceSurface {
     override suspend fun setFirstEditableField(value: String): Boolean =
         if (record(value)) {
             sokoFieldValues["product name"] = value
+            true
+        } else false
+
+    override suspend fun setSokoEditField(field: String,value: String): Boolean =
+        if(co.sanaa.agent.actions.SokoFieldBinding.canonical(field)!=null && record(value)) {
+            sokoFieldValues[field.lowercase()]=value
             true
         } else false
 

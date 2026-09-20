@@ -11,7 +11,7 @@ object WhatsAppConversationRoutes {
     fun identity(shortcut: String?, notificationKey: String, isGroup: Boolean): String =
         "wa-origin:" + java.security.MessageDigest.getInstance("SHA-256").digest("${if(isGroup) "group" else "direct"}|${shortcut?.takeIf { it.isNotBlank() } ?: notificationKey}".toByteArray()).joinToString("") { "%02x".format(it) }
     fun register(sbn: StatusBarNotification, isGroup: Boolean): String {
-        val id=identity(sbn.notification.shortcutId,"${sbn.key}|${sbn.postTime}",isGroup)
+        val id=identity(sbn.notification.shortcutId,sbn.key,isGroup)
         val intent=sbn.notification.contentIntent
         val now=System.currentTimeMillis()
         routes.entries.removeIf { it.value.expiresAt < now }
@@ -19,6 +19,8 @@ object WhatsAppConversationRoutes {
         return id
     }
     fun open(id: String): Boolean {
+        if(routes[id]?.expiresAt?.let { it > System.currentTimeMillis() } != true)
+            co.sanaa.agent.services.AgentNotificationListenerService.instance?.refreshWhatsAppRoutes()
         val route=routes[id] ?: return false
         if(route.expiresAt<System.currentTimeMillis()) { routes.remove(id);return false }
         return try { route.intent.send();true } catch (_: PendingIntent.CanceledException) { routes.remove(id);false }

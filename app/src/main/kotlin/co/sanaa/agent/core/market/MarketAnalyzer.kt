@@ -11,6 +11,29 @@ class MarketAnalyzer(
     private val db: MarketDatabase
 ) {
 
+    /** Persist dated observations and catalogue-specific comparisons for later review. */
+    fun recordReview(offerings: List<co.sanaa.agent.api.SokoListing>, now: Long = System.currentTimeMillis()) {
+        val writable=db.writableDatabase
+        writable.beginTransaction()
+        try {
+            for(category in getTrackedCategories()) {
+                val a=analyzeCategory(category)
+                val recent=writable.rawQuery("SELECT 1 FROM market_snapshots WHERE category=? AND snapshot_at>=?",arrayOf(category,(now-3_600_000).toString())).use { it.moveToFirst() }
+                if(!recent && a.totalListings>0) writable.execSQL("INSERT INTO market_snapshots(category,snapshot_at,avg_price_ugx,min_price_ugx,max_price_ugx,median_price_ugx,total_listings,hot_products) VALUES(?,?,?,?,?,?,?,?)",
+                    arrayOf(category,now,a.avgPriceUgx,a.minPriceUgx,a.maxPriceUgx,a.medianPriceUgx,a.totalListings,"[]"))
+            }
+            for(item in offerings) {
+                if(item.priceUgx<=0 || item.priceUgx>Int.MAX_VALUE) continue
+                val position=compareOurProduct(item.title,item.priceUgx.toInt())
+                writable.delete("soko_vs_market","soko_product_id=?",arrayOf(item.id))
+                writable.execSQL("INSERT INTO soko_vs_market(soko_product_id,soko_title,soko_price_ugx,market_avg_ugx,market_min_ugx,market_max_ugx,price_position,competitors_count,analyzed_at,recommendation) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    arrayOf(item.id,item.title,item.priceUgx,position.marketAvgUgx,position.marketMinUgx,position.marketMaxUgx,position.position,position.competitorCount,now,position.recommendation))
+            }
+            writable.delete("market_snapshots","snapshot_at<?",arrayOf((now-90L*86400000).toString()))
+            writable.setTransactionSuccessful()
+        } finally { writable.endTransaction() }
+    }
+
     /** Structured owner dashboard; unlike the legacy prose report this is actionable UI data. */
     fun dashboard(sokoProducts: List<String> = emptyList()): Map<String, Any> {
         val sources = listOf("JIJI", "JUMIA").map { source ->
@@ -199,7 +222,7 @@ class MarketAnalyzer(
             marketMinUgx = min,
             marketMaxUgx = max,
             position = position,
-            competitorCount = listings.size,
+            competitorCount = prices.size,
             recommendation = recommendation
         )
     }

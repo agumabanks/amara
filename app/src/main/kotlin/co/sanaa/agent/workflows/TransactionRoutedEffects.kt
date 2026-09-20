@@ -179,11 +179,11 @@ class TransactionRoutedEffects(
                     preflight = { if (field.isBlank()) "apply_soko_edit needs structured listing/field/value inputs" else null },
                     act = {
                         if (!surface.openSokoEditForm(product)) false
-                        else if (!surface.setFirstEditableField(value)) false
+                        else if (!surface.setSokoEditField(field,value)) false
                         else surface.saveSokoEditForm()
                     },
                     verify = {
-                        val reopened = surface.openSokoEditForm(product)
+                        val reopened = surface.openSokoEditForm(co.sanaa.agent.actions.SokoFieldBinding.reopenTitle(product,field,value))
                         SokoSaveVerification.evaluate(
                             field.ifBlank { "value" }, value,
                             SokoSaveVerification.ReopenObservation(

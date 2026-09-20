@@ -5,7 +5,7 @@ import org.json.JSONObject
 /**
  * Domain categories for Amara's autonomous work.
  */
-enum class Domain { SOKO, TIKTOK, WHATSAPP, INTERNAL }
+enum class Domain { SOKO, TIKTOK, YOUTUBE, WHATSAPP, INTERNAL }
 
 /**
  * Types of work items that Amara can perform.
@@ -16,7 +16,8 @@ enum class WorkKind {
     // Soko
     SOKO_AUDIT, SOKO_ORDER_CONFIRM, SOKO_RESTOCK_DRAFT, SOKO_PRICE_ADJUST, SOKO_INVENTORY_CHECK,
     // TikTok
-    TIKTOK_COMMENT_REPLY, TIKTOK_POST_PUBLISH, TIKTOK_ANALYTICS_CHECK,
+    TIKTOK_COMMENT_REPLY, TIKTOK_POST_PUBLISH, TIKTOK_STORY_PUBLISH, TIKTOK_ANALYTICS_CHECK,
+    YOUTUBE_SHORT_PUBLISH,
     // Jiji / Market
     JIJI_SCRAPE, JUMIA_CAPTURE, MARKET_ANALYSIS,
     // Internal

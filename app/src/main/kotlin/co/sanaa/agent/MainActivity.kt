@@ -49,8 +49,37 @@ class MainActivity : FlutterActivity() {
     private val statusRefresher by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         co.sanaa.agent.core.RuntimeStatusRefresher(applicationContext)
     }
+    private val mediaCleanup by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        co.sanaa.agent.actions.BoundMediaCleanupPolicy(applicationContext.filesDir, runtime.memory, runtime.workQueue)
+    }
     private var pendingAttachmentResult: MethodChannel.Result? = null
+    private var pendingFolderResult: MethodChannel.Result? = null
     private var pendingContactResult: MethodChannel.Result? = null
+    private var accessibilityPromptShown = false
+    private var accessibilityPrompt: android.app.AlertDialog? = null
+    private val accessibilityPromptHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val accessibilityPromptCheck = Runnable { checkAccessibilityRecovery() }
+
+    private fun checkAccessibilityRecovery() {
+        if (isFinishing || isDestroyed || !::permissions.isInitialized) return
+        val on = co.sanaa.agent.core.OwnerPower(applicationContext).isOn()
+        val ready = permissions.statusMap()["accessibility"] == true &&
+            co.sanaa.agent.services.AccessibilityAgentService.isBound()
+        if (!on || ready) {
+            accessibilityPromptShown = false
+            accessibilityPrompt?.dismiss()
+            accessibilityPrompt = null
+            return
+        }
+        if (accessibilityPromptShown) return
+        accessibilityPromptShown = true
+        accessibilityPrompt = android.app.AlertDialog.Builder(this)
+            .setTitle("Turn on Amara phone access")
+            .setMessage("Amara is On, but Android Accessibility is not connected. Open Accessibility settings, select Sanaa Agent and enable its service. If it is already enabled, turn it off and back on. Amara will check the connection when you return.")
+            .setPositiveButton("Open settings") { _, _ -> permissions.openAccessibilitySettings() }
+            .setNegativeButton("Later", null)
+            .show()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -93,6 +122,99 @@ class MainActivity : FlutterActivity() {
                         "screenshotSupported" to runtime.actions.isScreenshotSupported(),
                     )
                     withContext(Dispatchers.Main) { result.success(payload) }
+                }
+                "doctorStatus" -> CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                    val store=co.sanaa.agent.core.work.WorkBlockers(applicationContext)
+                    val payload=mapOf("health" to runtime.health.snapshot(),"issues" to store.rows(),"resolved" to store.resolved())
+                    withContext(Dispatchers.Main) { result.success(payload) }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { result.error("CHECK_FAILED", co.sanaa.agent.core.Redactor.safeDiagnostic(e), null) }
+                    }
+                }
+                "deepRepairWhatsAppGroups" -> CoroutineScope(Dispatchers.IO).launch {
+                    runCatching {
+                        val outcome = runtime.health.run()
+                        co.sanaa.agent.core.ModuleActivityStore(applicationContext).use {
+                            it.record("owner-repair:${java.util.UUID.randomUUID()}","DOCTOR_REPAIR",
+                                if (!co.sanaa.agent.core.OwnerPower(applicationContext).isOn()) "SKIPPED" else if(outcome.success) "DONE" else "ESCALATED",outcome.summary)
+                        }
+                        runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("owner_group_repair", ""))
+                        mapOf("success" to outcome.success, "summary" to outcome.summary)
+                    }.fold(
+                        onSuccess = { withContext(Dispatchers.Main) { result.success(it) } },
+                        onFailure = { withContext(Dispatchers.Main) { result.error("REPAIR_FAILED", it.message, null) } },
+                    )
+                }
+                "closeAllReviewHolds" -> CoroutineScope(Dispatchers.IO).launch {
+                    runCatching {
+                        val disposition = call.argument<String>("disposition").orEmpty()
+                        val rows = runtime.workQueue.dashboard()["needsReview"] as? List<*> ?: emptyList<Any>()
+                        val keys = rows.mapNotNull { (it as? Map<*, *>)?.get("key") as? String }
+                        val closed = runtime.workQueue.closeReviews(keys, disposition)
+                        val blockers = runtime.workBlockers.clearAllOwnerReviewed(
+                            "Owner closed all review holds; no delivery, repair, or external success is claimed.",
+                        )
+                        closed + blockers
+                    }.fold(
+                        onSuccess = { withContext(Dispatchers.Main) { result.success(it) } },
+                        onFailure = { withContext(Dispatchers.Main) { result.error("REVIEW_CLOSE_FAILED", it.message, null) } },
+                    )
+                }
+                "runNightlyDoctorNow" -> CoroutineScope(Dispatchers.IO).launch {
+                    runCatching {
+                        co.sanaa.agent.core.work.NightlyDoctorCleanup(applicationContext).run(runtime)
+                    }.fold(
+                        onSuccess = { withContext(Dispatchers.Main) { result.success(mapOf("ran" to it.ran, "reason" to it.reason, "learned" to it.learned, "compacted" to it.compacted, "clearedStaleWaits" to it.clearedStaleWaits)) } },
+                        onFailure = { withContext(Dispatchers.Main) { result.error("NIGHTLY_DOCTOR_FAILED", it.message, null) } },
+                    )
+                }
+                "requestMarketResearch" -> CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                    val query=call.argument<String>("query").orEmpty().trim()
+                    require(query.length<=120) { "Research query must be 120 characters or fewer" }
+                    val requested=mutableListOf<String>()
+                    val held=mutableListOf<String>()
+                    if(!co.sanaa.agent.core.OwnerPower(applicationContext).isOn()) held += "Turn Amara on to run research"
+                    else {
+                        fun offer(kind: co.sanaa.agent.core.work.WorkKind, label: String, payload: org.json.JSONObject) {
+                            val item=co.sanaa.agent.core.work.WorkItem("owner-research:$kind:${co.sanaa.agent.core.ContentHashing.hash(query)}:${System.currentTimeMillis()/900000}",
+                                co.sanaa.agent.core.work.Domain.INTERNAL,kind,payload,baseValueKes=240.0,urgencyHalfLifeHours=1.0,estimatedScreenSeconds=120,
+                                requires=setOf(co.sanaa.agent.core.work.Capability.SCREEN,co.sanaa.agent.core.work.Capability.NETWORK))
+                            if(runtime.workQueue.offer(item)==co.sanaa.agent.core.work.WorkQueue.OfferResult.REJECTED_CAP) held += "$label queue is full"
+                            else requested += label
+                        }
+                        if(config.jijiScrapingEnabled && runtime.jijiScraper.isInstalled())
+                            offer(co.sanaa.agent.core.work.WorkKind.JIJI_SCRAPE,"Jiji",org.json.JSONObject().put("category","Printers & Scanners").put("query",query))
+                        else held += "Enable Jiji research and install Jiji"
+                        if(config.jumiaIntelligenceEnabled && runtime.jumiaScraper.isInstalled())
+                            offer(co.sanaa.agent.core.work.WorkKind.JUMIA_CAPTURE,"Jumia",org.json.JSONObject())
+                        else held += "Enable Jumia research and install Jumia; vision is needed only if product cards are inaccessible"
+                        runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("owner_market_research",""))
+                    }
+                    withContext(Dispatchers.Main) { result.success(mapOf("queued" to requested,"blockers" to held)) }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { result.error("CHECK_FAILED", co.sanaa.agent.core.Redactor.safeDiagnostic(e), null) }
+                    }
+                }
+                "operationalHealth" -> CoroutineScope(Dispatchers.IO).launch {
+                    val health = runtime.health.snapshot()
+                    withContext(Dispatchers.Main) { result.success(health) }
+                }
+                "runOperationalHealth" -> CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                    val outcome = runtime.health.run()
+                    co.sanaa.agent.core.ModuleActivityStore(applicationContext).use {
+                        it.record("owner-health:${java.util.UUID.randomUUID()}","DOCTOR_CHECK",
+                            if (!co.sanaa.agent.core.OwnerPower(applicationContext).isOn()) "SKIPPED" else if(outcome.success) "DONE" else "ESCALATED",outcome.summary)
+                    }
+                    runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("owner_health_check", ""))
+                    withContext(Dispatchers.Main) {
+                        result.success(mapOf("success" to outcome.success, "summary" to outcome.summary, "health" to runtime.health.snapshot()))
+                    }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { result.error("CHECK_FAILED", co.sanaa.agent.core.Redactor.safeDiagnostic(e), null) }
+                    }
                 }
                 "openAccessibility" -> { permissions.openAccessibilitySettings(); result.success(null) }
                 "openBattery" -> { permissions.requestBatteryExemption(); result.success(null) }
@@ -202,6 +324,17 @@ class MainActivity : FlutterActivity() {
                 }
                 "hasGroqKey" -> result.success(config.groqApiKey.isNotBlank())
                 "testGroq" -> CoroutineScope(Dispatchers.IO).launch { runtime.groq.testConnection(result) }
+                "inspectTerminalShop" -> CoroutineScope(Dispatchers.IO).launch {
+                    runCatching { runtime.soko.inspectTerminalShop() }
+                        .onSuccess { withContext(Dispatchers.Main) { result.success(it) } }
+                        .onFailure { withContext(Dispatchers.Main) { result.error("SHOP_IDENTITY", it.message, null) } }
+                }
+                "pairingDeviceId" -> result.success(runtime.backend.pairingDeviceId())
+                "pairDevice" -> CoroutineScope(Dispatchers.IO).launch {
+                    runCatching { runtime.backend.pair(call.argument<String>("code").orEmpty().trim()) }
+                        .onSuccess { synced -> withContext(Dispatchers.Main) { result.success(synced) } }
+                        .onFailure { withContext(Dispatchers.Main) { result.error("PAIR_ERROR", it.message, null) } }
+                }
                 "syncConfig" -> CoroutineScope(Dispatchers.IO).launch {
                     runCatching { runtime.backend.registerAndSync() }
                         .onSuccess { withContext(Dispatchers.Main) { result.success(true) } }
@@ -334,6 +467,8 @@ class MainActivity : FlutterActivity() {
                             )
                         },
                         "queue" to runtime.workQueue.dashboard(),
+                        "sokoBridge" to co.sanaa.agent.core.SokoTerminalBridge(this@MainActivity).status(),
+                        "terminalShop" to co.sanaa.agent.core.SokoTerminalBridge(this@MainActivity).shopStatus(),
                         "settings" to mapOf(
                             "proactiveReadOnlyAudits" to config.proactiveReadOnlyAudits,
                             "quietHoursStart" to config.quietHoursStart,
@@ -446,6 +581,21 @@ class MainActivity : FlutterActivity() {
                     val entry=runtime.contacts.byId(id)
                     result.success(entry?.isGroup==true && co.sanaa.agent.modules.WhatsAppConversationRoutes.open(id))
                 }
+                "checkWhatsappGroup" -> {
+                    val entry=runtime.contacts.byId(call.argument<String>("id").orEmpty())
+                    if(entry?.isGroup!=true || !entry.canMonitor) result.error("GROUP_ACCESS","Group monitoring permission is required",null)
+                    else {
+                        val offered=runtime.workQueue.offer(co.sanaa.agent.core.work.WorkItem(
+                            "group-doctor:${entry.id}:${System.currentTimeMillis()/300000}",co.sanaa.agent.core.work.Domain.INTERNAL,
+                            co.sanaa.agent.core.work.WorkKind.INTERNAL_HEALTH_CHECK,org.json.JSONObject().put("check_group_id",entry.id).put("contact_id",entry.id),
+                            baseValueKes=300.0,urgencyHalfLifeHours=0.5,estimatedScreenSeconds=60,
+                            requires=setOf(co.sanaa.agent.core.work.Capability.SCREEN,co.sanaa.agent.core.work.Capability.NETWORK)))
+                        runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("group_doctor",""))
+                        if(offered==co.sanaa.agent.core.work.WorkQueue.OfferResult.REJECTED_CAP)
+                            result.error("QUEUE_FULL","Work queue is full; try again after queued work completes",null)
+                        else result.success(true)
+                    }
+                }
                 "whatsappGroupSettings" -> {
                     result.success(runtime.contacts.listAll().filter { it.isGroup }.map(runtime.groupSettings::row))
                 }
@@ -453,14 +603,51 @@ class MainActivity : FlutterActivity() {
                     try {
                         runtime.groupSettings.update(runtime.contacts,requireNotNull(call.argument<String>("id")),
                             requireNotNull(call.argument<String>("field")),requireNotNull(call.argument<Any>("value")))
+                        runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("group_settings_changed", ""))
                         result.success(true)
                     } catch(e:Exception) { result.error("GROUP_SETTING",e.message,null) }
                 }
-                "amaraSettings" -> {
+                "checkYouTubePreparation" -> CoroutineScope(Dispatchers.IO).launch {
+                    runCatching {
+                        val settings=co.sanaa.agent.core.shorts.ShortsSettings(applicationContext)
+                        check(settings.enabled && co.sanaa.agent.core.OwnerPower(applicationContext).isOn()) { "Enable Amara and YouTube first" }
+                        check(co.sanaa.agent.core.shorts.ShortsMediaPolicy.validHandle(settings.channel)) { "Choose a YouTube channel first" }
+                        val verifiedPosts=runtime.memory.allSideEffectTransactions().filter {
+                            it.capability==co.sanaa.agent.core.CapabilityIds.POST_TIKTOK && it.state==co.sanaa.agent.core.SideEffectState.VERIFIED
+                        }.sortedByDescending { it.createdAt }
+                        check(verifiedPosts.isNotEmpty()) { "No verified TikTok source post is available" }
+                        // Reconciliation can update an older receipt after a newer
+                        // publication. Select retained, verified source metadata;
+                        // export still requires the exact own-profile caption.
+                        val retained=co.sanaa.agent.core.shorts.ShortsQueue(applicationContext).use { queue ->
+                            queue.latestVerifiedSource(runtime.memory) ?: verifiedPosts.firstNotNullOfOrNull { receipt ->
+                                val payload=runtime.workQueue.withMediaCleanupReferences { refs -> refs.firstOrNull { it.key==receipt.idempotencyKey }?.let { org.json.JSONObject(it.payload) } }
+                                payload?.let { receipt.idempotencyKey to it }
+                            }
+                        } ?: error("Verified TikTok posts have no retained source metadata. A new verified ad is required for preparation.")
+                        val (sourceKey,sourcePayload)=retained
+                        val payload=sourcePayload.put("source_post_key",sourceKey)
+                            .put("youtube_channel",settings.channel).put("prepare_only",true).put("owner_always_on",true)
+                        val item=co.sanaa.agent.core.work.WorkItem("youtube-check:${System.currentTimeMillis()}",co.sanaa.agent.core.work.Domain.YOUTUBE,
+                            co.sanaa.agent.core.work.WorkKind.YOUTUBE_SHORT_PUBLISH,payload,220.0,urgencyHalfLifeHours=1.0,estimatedScreenSeconds=180,
+                            requires=setOf(co.sanaa.agent.core.work.Capability.SCREEN,co.sanaa.agent.core.work.Capability.NETWORK),riskTier=co.sanaa.agent.core.work.RiskTier.LOW)
+                        check(runtime.workQueue.offer(item)==co.sanaa.agent.core.work.WorkQueue.OfferResult.ACCEPTED) { "Preparation check could not be queued" }
+                        runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("youtube_preparation",""))
+                        "Preparation check queued; Amara will prepare the latest verified TikTok ad without uploading"
+                    }.fold({ withContext(Dispatchers.Main) { result.success(it) } },
+                        { withContext(Dispatchers.Main) { result.error("SHORTS_CHECK",it.message,null) } })
+                }
+                "amaraSettings" -> CoroutineScope(Dispatchers.IO).launch {
+                    try {
                     val settings = co.sanaa.agent.core.AmaraSettings(this@MainActivity)
-                    result.success(settings.getAll() + mapOf(
+                    val payload = settings.getAll() + mapOf(
+                        "youtubeQueue" to co.sanaa.agent.core.shorts.ShortsQueue(applicationContext).use { it.summary() },
+                        "moduleStats" to co.sanaa.agent.core.ModuleActivityStore(applicationContext).use { it.dashboard(runtime.memory.allSideEffectTransactions()) },
+                        "tiktokCommentInbox" to co.sanaa.agent.modules.TikTokCommentInbox(applicationContext).use { it.summary() },
                         "sokoPinStored" to runtime.vault.status(AgentRuntime.SOKO_PIN_ID).let { it.configured && !it.locked },
-                    ))
+                    )
+                    withContext(Dispatchers.Main) { result.success(payload) }
+                    } catch(e: Exception) { withContext(Dispatchers.Main) { result.error("SETTINGS_READ",e.message,null) } }
                 }
                 "marketReport" -> CoroutineScope(Dispatchers.IO).launch {
                     val report = runCatching { runtime.marketAnalyzer.generateReport() }
@@ -469,7 +656,16 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "marketDashboard" -> CoroutineScope(Dispatchers.IO).launch {
-                    val dashboard = runCatching { runtime.marketAnalyzer.dashboard(runtime.chatStore.getProducts()) + mapOf("growth" to runtime.growthStore.dashboard()) }
+                    val dashboard = runCatching {
+                        val catalogue=runCatching { runtime.soko.promotableOfferings().map { it.summary() } }
+                        runtime.marketAnalyzer.dashboard(catalogue.getOrDefault(emptyList())) + mapOf(
+                            "growth" to if(catalogue.isSuccess && applicationContext.getSharedPreferences("market_review_scope",MODE_PRIVATE).getString("scope",null)==
+                                runCatching { co.sanaa.agent.core.TerminalShopIdentity.readFresh(applicationContext).scope }.getOrNull()) runtime.growthStore.dashboard()
+                                else mapOf("review" to "A fresh review for this shop is needed before showing recommendations."),
+                            "catalogueBlocker" to (catalogue.exceptionOrNull()?.message ?: ""),
+                            "researchScope" to "Jiji: selected search or Printers & Scanners · Jumia: featured offers",
+                            "operational" to runtime.health.snapshot(),"updatedAt" to System.currentTimeMillis())
+                    }
                     withContext(Dispatchers.Main) {
                         dashboard.fold(result::success) { result.error("MARKET_DASHBOARD_FAILED", it.message, null) }
                     }
@@ -478,11 +674,38 @@ class MainActivity : FlutterActivity() {
                     val payload = mapOf(
                         "loop" to runtime.workLoop.diagnostics(),
                         "queue" to runtime.workQueue.dashboard(),
+                        "sokoBridge" to co.sanaa.agent.core.SokoTerminalBridge(this@MainActivity).status(),
+                        "terminalShop" to co.sanaa.agent.core.SokoTerminalBridge(this@MainActivity).shopStatus(),
                         "governor" to runtime.safetyGovernor.dashboard(),
                         "learning" to runtime.learningLoop.dashboard(),
                         "settings" to co.sanaa.agent.core.AmaraSettings(this@MainActivity).getAll(),
                     )
                     withContext(Dispatchers.Main) { result.success(payload) }
+                }
+                "acknowledgeHealthAlerts" -> CoroutineScope(Dispatchers.IO).launch {
+                    runCatching { runtime.health.acknowledgeAlerts() }.fold(
+                        onSuccess = { withContext(Dispatchers.Main) { result.success(true) } },
+                        onFailure = { withContext(Dispatchers.Main) { result.error("ACK_FAILED", it.message, null) } },
+                    )
+                }
+                "archivePendingWork" -> CoroutineScope(Dispatchers.IO).launch {
+                    val key = call.argument<String>("key").orEmpty()
+                    val changed = runtime.workQueue.archivePending(key)
+                    withContext(Dispatchers.Main) { result.success(changed) }
+                }
+                "closeWorkReviews" -> CoroutineScope(Dispatchers.IO).launch {
+                    runCatching { runtime.workQueue.closeReviews(
+                        call.argument<List<String>>("keys").orEmpty(), call.argument<String>("disposition").orEmpty())
+                    }.fold(onSuccess = { withContext(Dispatchers.Main) { result.success(it) } },
+                        onFailure = { withContext(Dispatchers.Main) { result.error("REVIEW_CLOSE_FAILED", it.message, null) } })
+                }
+                "closeWorkReview" -> CoroutineScope(Dispatchers.IO).launch {
+                    val closed = runCatching { runtime.workQueue.closeReview(
+                        call.argument<String>("key").orEmpty(), call.argument<String>("disposition").orEmpty(),
+                    ) }
+                    withContext(Dispatchers.Main) {
+                        closed.fold(result::success) { result.error("REVIEW_CLOSE_FAILED", it.message, null) }
+                    }
                 }
                 "wakeAutonomousLoop" -> {
                     runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("owner_dashboard_refresh", ""))
@@ -493,6 +716,16 @@ class MainActivity : FlutterActivity() {
                     val value = call.argument<Any>("value")
                     val settings = co.sanaa.agent.core.AmaraSettings(this@MainActivity)
                     val success = if (value != null) settings.set(key, value) else false
+                    if (success && key == "amaraOn") {
+                        accessibilityPromptShown = false
+                        accessibilityPromptHandler.removeCallbacks(accessibilityPromptCheck)
+                        accessibilityPromptHandler.postDelayed(accessibilityPromptCheck, 1500L)
+                    }
+                    if (success && key == "youtubeEnabled" && value == true) {
+                        val permission = if (android.os.Build.VERSION.SDK_INT >= 33) android.Manifest.permission.READ_MEDIA_VIDEO else android.Manifest.permission.READ_EXTERNAL_STORAGE
+                        if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity,permission) != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                            androidx.core.app.ActivityCompat.requestPermissions(this@MainActivity,arrayOf(permission),804)
+                    }
                     if (success && key in setOf("tikTokEnabled", "tikTokIntervalMinutes")) {
                         if (config.tikTokTestMode) AgentWorkScheduler.scheduleTikTokTest(applicationContext)
                         else WorkManager.getInstance(applicationContext).cancelUniqueWork(co.sanaa.agent.workers.TikTokGrowthWorker.TAG)
@@ -534,6 +767,36 @@ class MainActivity : FlutterActivity() {
                             { result.success(mapOf("success" to it.success, "message" to it.message, "items" to it.mergedItems)) },
                             { result.success(mapOf("success" to false, "message" to (it.message ?: "Restore failed"), "items" to 0)) },
                         )
+                    }
+                }
+                "chooseSokoSharedFolder" -> {
+                    if (pendingFolderResult != null) result.error("busy", "Folder selection already open", null)
+                    else {
+                        pendingFolderResult = result
+                        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION), 8104)
+                    }
+                }
+                "previewMediaCleanup" -> CoroutineScope(Dispatchers.IO).launch {
+                    runCatching { mediaCleanup.previewMediaCleanup() }.fold(
+                        onSuccess = { withContext(Dispatchers.Main) { result.success(it) } },
+                        onFailure = { withContext(Dispatchers.Main) { result.error("MEDIA_CLEANUP_FAILED", co.sanaa.agent.core.Redactor.safeDiagnostic(it), null) } },
+                    )
+                }
+                "confirmMediaCleanup" -> CoroutineScope(Dispatchers.IO).launch {
+                    runCatching {
+                        val ids = call.argument<List<*>>("candidateIds")
+                        require(ids != null && ids.all { it is String }) { "candidateIds must be a list of strings" }
+                        mediaCleanup.confirmMediaCleanup(ids.map { it as String })
+                    }.fold(
+                        onSuccess = { withContext(Dispatchers.Main) { result.success(it) } },
+                        onFailure = { withContext(Dispatchers.Main) { result.error("MEDIA_CLEANUP_FAILED", co.sanaa.agent.core.Redactor.safeDiagnostic(it), null) } },
+                    )
+                }
+                "exportSokoSharedMedia" -> CoroutineScope(Dispatchers.IO).launch {
+                    val exported = runCatching { co.sanaa.agent.core.SokoSharedFolder(applicationContext).exportPreparedMedia() }
+                    withContext(Dispatchers.Main) {
+                        exported.fold({ result.success(it) }, { result.error("export_failed", it.message, null) })
                     }
                 }
                 "stopCurrentTask" -> {
@@ -1164,10 +1427,31 @@ class MainActivity : FlutterActivity() {
             MethodChannel(flutterEngine!!.dartExecutor.binaryMessenger, CHANNEL)
                 .invokeMethod("permissionsChanged", permissions.statusMap())
         }
+        accessibilityPromptHandler.removeCallbacks(accessibilityPromptCheck)
+        accessibilityPromptHandler.postDelayed(accessibilityPromptCheck, 2500L)
+    }
+
+    override fun onPause() {
+        accessibilityPromptHandler.removeCallbacks(accessibilityPromptCheck)
+        accessibilityPrompt?.dismiss()
+        accessibilityPrompt = null
+        super.onPause()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 8104) {
+            val pending = pendingFolderResult ?: return
+            pendingFolderResult = null
+            val uri = data?.data
+            if (resultCode != Activity.RESULT_OK || uri == null) { pending.success(false); return }
+            runCatching {
+                contentResolver.takePersistableUriPermission(uri, data.flags and
+                    (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
+                co.sanaa.agent.core.SokoSharedFolder(applicationContext).save(uri)
+            }.fold({ pending.success(true) }, { pending.error("folder_access", it.message, null) })
+            return
+        }
         if (requestCode == PICK_CONTACT) {
             val pending = pendingContactResult ?: return
             pendingContactResult = null

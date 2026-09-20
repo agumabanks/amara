@@ -13,10 +13,21 @@ import java.util.concurrent.TimeUnit
  * Reads Soko projections from Amara's server-side SELECT-only database bridge.
  * It never calls the Soko API and intentionally exposes no database write path.
  */
-class SokoApiClient(private val config: SecureConfig) {
-    private val client = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+class SokoApiClient(private val config: SecureConfig, private val identity: () -> co.sanaa.agent.core.TerminalShopIdentity = { error("Verified Terminal identity is required") }) {
+    private val client = OkHttpClient.Builder().dns(BackendDns.forUrl { config.backendUrl }).connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+
+    /** Explicit owner diagnostic; makes no change and does not resume automation. */
+    suspend fun inspectTerminalShop(): Map<String, Any> {
+        val shop=identity()
+        val listings=getArray("listings", manualInspection=true)
+        return mapOf("shop" to shop.name, "scope" to shop.scope, "listingCount" to listings.size,
+            "sampleTitles" to listings.take(5).map { it.optString("title") })
+    }
 
     suspend fun activeListings(): List<SokoListing> = getArray("listings").mapNotNull(::parseListing)
+
+    suspend fun commerceProfile(): JSONObject = getArray("commerce").firstOrNull() ?: JSONObject()
+    suspend fun recentOrders(): List<JSONObject> = getArray("orders")
 
     /** Authenticated bridge applies the registered business scope server-side. */
     suspend fun publishedServices(): List<JSONObject> = getArray("services").filter {
@@ -37,7 +48,8 @@ class SokoApiClient(private val config: SecureConfig) {
         )
     }
 
-    suspend fun competitors(category: String): List<SokoListing> = activeListings()
+    /** Same-shop context only; these are not competitor observations. */
+    suspend fun sameShopListings(category: String): List<SokoListing> = activeListings()
         .filter { category.isNotBlank() && it.category.equals(category, ignoreCase = true) }
 
     suspend fun unreadMessages(): List<SokoMessage> = getArray("messages")
@@ -62,20 +74,26 @@ class SokoApiClient(private val config: SecureConfig) {
 
     suspend fun isHealthy(): Boolean = runCatching { activeListings(); true }.getOrDefault(false)
 
-    private suspend fun getArray(resource: String): List<JSONObject> = withContext(Dispatchers.IO) {
+    private suspend fun getArray(resource: String, manualInspection: Boolean = false): List<JSONObject> = withContext(Dispatchers.IO) {
+        check(manualInspection || config.ownerAllowsWork()) { "Amara is off by owner request" }
         if (config.agentToken.isBlank() || config.deviceId.isBlank()) {
             throw IllegalStateException("Agent is not registered")
         }
+        val shop = identity()
         val url = "${config.backendUrl.trimEnd('/')}/soko/$resource?device_id=${config.deviceId}"
         val request = Request.Builder().url(url).get()
             .header("Authorization", "Bearer ${config.agentToken}")
             .header("Accept", "application/json")
+            .header("X-Terminal-Identity", shop.assertion)
             .build()
         client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException("Soko database bridge returned HTTP ${response.code}")
-            val array = JSONObject(body).optJSONArray("data") ?: JSONArray()
-            (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+            val responseJson=JSONObject(body)
+            val confirmed=responseJson.getJSONObject("shop_identity")
+            check(confirmed.getLong("seller_id")==shop.sellerId && confirmed.getLong("shop_id")==shop.shopId && identity().scope==shop.scope) { "Terminal shop changed during the request; old content discarded" }
+            val array = responseJson.optJSONArray("data") ?: JSONArray()
+            (0 until array.length()).mapNotNull { array.optJSONObject(it)?.put("shop_scope",shop.scope)?.put("shop_name",shop.name) }
         }
     }
 

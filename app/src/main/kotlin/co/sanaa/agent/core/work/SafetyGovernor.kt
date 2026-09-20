@@ -13,6 +13,7 @@ class SafetyGovernor(
     context: Context,
     private val maxDailyScreenMinutes: () -> Int = { 90 },
     private val maxRetryCooldownMinutes: () -> Int = { 1440 },
+    private val tikTokPostingMinutes: () -> Int = { 0 },
 ) : SQLiteOpenHelper(context, "amara_safety.db", null, 1) {
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -99,7 +100,8 @@ class SafetyGovernor(
         }
 
         // Check per-kind circuit breaker
-        if (isKindBreakerOpen(item.kind)) {
+        val destinationManagedGroup = item.kind == WorkKind.WA_BROADCAST && item.payload.optString("group_target").isNotBlank()
+        if (!destinationManagedGroup && getKindBreakerCooldown(item.kind,breakerKey(item)) > 0) {
             return BreakerVerdict(false, "Kind ${item.kind} is circuit-broken")
         }
 
@@ -129,12 +131,17 @@ class SafetyGovernor(
         val dayStart = dayStart()
         val dailyScreen = getCounter("daily", "screen_seconds", dayStart)
         val dailyScreenLimit = maxDailyScreenMinutes().coerceIn(10, 1440) * 60
-        if (dailyScreen >= dailyScreenLimit) {
+        val inboundReserveUsed = getCounter("daily", "inbound_screen_reserve", dayStart)
+        val inboundReserveAvailable = item.kind == WorkKind.WA_REPLY_INBOUND && !item.payload.optBoolean("manager_report") && inboundReserveUsed < 180
+        val postingReserveAvailable = item.kind == WorkKind.TIKTOK_POST_PUBLISH && tikTokPostingSecondsRemaining() >= 180
+        if (Capability.SCREEN in item.requires && dailyScreen >= dailyScreenLimit && !inboundReserveAvailable && !postingReserveAvailable) {
             return BreakerVerdict(false, "Daily screen budget exhausted (${maxDailyScreenMinutes()} min)")
         }
 
         val dailyMessages = getCounter("daily", "messages_sent", dayStart)
-        if (dailyMessages >= 40 && item.kind in setOf(WorkKind.WA_FOLLOWUP, WorkKind.WA_BROADCAST)) {
+        // Owner-scheduled groups have their own cadence, permissions and delivery
+        // holds. Customer replies must not silently consume their entire allowance.
+        if (!destinationManagedGroup && dailyMessages >= 40 && item.kind in setOf(WorkKind.WA_FOLLOWUP, WorkKind.WA_BROADCAST)) {
             return BreakerVerdict(false, "Daily message limit reached (40)")
         }
 
@@ -152,6 +159,12 @@ class SafetyGovernor(
         // Update daily counters
         incrementCounter("daily", "attempts", dayStart, 1)
         incrementCounter("daily", "screen_seconds", dayStart, result.screenSecondsUsed)
+        if (result.item.kind == WorkKind.TIKTOK_POST_PUBLISH) {
+            incrementCounter("daily", "tiktok_posting_seconds", dayStart, result.screenSecondsUsed)
+        }
+        if (result.item.kind == WorkKind.WA_REPLY_INBOUND && !result.item.payload.optBoolean("manager_report")) {
+            incrementCounter("daily", "inbound_screen_reserve", dayStart, result.screenSecondsUsed)
+        }
 
         if (result.status == WorkStatus.DONE) {
             incrementCounter("daily", "successes", dayStart, 1)
@@ -164,7 +177,7 @@ class SafetyGovernor(
 
         // Policy deferrals and escalations are not implementation failures.
         if (result.status == WorkStatus.DONE || result.status == WorkStatus.FAILED) {
-            updateKindBreaker(result.item.kind, result.status == WorkStatus.DONE)
+            updateKindBreaker(breakerKey(result.item), result.status == WorkStatus.DONE)
         }
     }
 
@@ -180,10 +193,10 @@ class SafetyGovernor(
      * Get remaining cooldown for a kind (0 if not broken).
      */
     @Synchronized
-    fun getKindBreakerCooldown(kind: WorkKind): Long {
+    fun getKindBreakerCooldown(kind: WorkKind, key: String = kind.name): Long {
         val cursor = readableDatabase.rawQuery(
             "SELECT cooldown_until, last_trip_at FROM kind_breakers WHERE kind = ?",
-            arrayOf(kind.name)
+            arrayOf(key)
         )
         val configuredCap = maxRetryCooldownMinutes().coerceIn(0, 1440)
         // One difficult conversation must not silence every other customer for hours.
@@ -199,6 +212,10 @@ class SafetyGovernor(
     }
 
     fun screenSecondsToday(): Int = getCounter("daily", "screen_seconds", dayStart())
+    fun tikTokPostingSecondsRemaining(): Int = (tikTokPostingMinutes().coerceIn(0, 240) * 60 -
+        getCounter("daily", "tiktok_posting_seconds", dayStart())).coerceAtLeast(0)
+    fun tikTokPostingLimitMinutes(): Int = tikTokPostingMinutes().coerceIn(0, 240)
+    fun inboundReserveSecondsToday(): Int = getCounter("daily", "inbound_screen_reserve", dayStart())
     fun messagesSentToday(): Int = getCounter("daily", "messages_sent", dayStart())
     fun attemptsToday(): Int = getCounter("daily", "attempts", dayStart())
 
@@ -210,6 +227,8 @@ class SafetyGovernor(
         "messagesToday" to messagesSentToday(),
         "screenSecondsToday" to screenSecondsToday(),
         "screenLimitMinutes" to maxDailyScreenMinutes().coerceIn(10, 1440),
+        "inboundReserveSecondsToday" to inboundReserveSecondsToday(),
+        "inboundReserveSecondsRemaining" to (180 - inboundReserveSecondsToday()).coerceAtLeast(0),
         "openBreakers" to WorkKind.entries.filter(::isKindBreakerOpen).map { it.name },
     )
 
@@ -227,11 +246,19 @@ class SafetyGovernor(
         return rate
     }
 
-    private fun updateKindBreaker(kind: WorkKind, success: Boolean) {
+    fun cooldownFor(item: WorkItem): Long = getKindBreakerCooldown(item.kind, breakerKey(item))
+
+    private fun breakerKey(item: WorkItem): String = when {
+        item.payload.optBoolean("manager_report") -> "MANAGER_REPORT"
+        item.payload.optBoolean("manager_command_candidate") -> "MANAGER_COMMAND"
+        else -> item.kind.name
+    }
+
+    private fun updateKindBreaker(key: String, success: Boolean) {
         val now = System.currentTimeMillis()
         val existing = readableDatabase.rawQuery(
             "SELECT trip_count, consecutive_failures, attempts_total, failures_total FROM kind_breakers WHERE kind = ?",
-            arrayOf(kind.name)
+            arrayOf(key)
         )
 
         if (existing.moveToFirst()) {
@@ -252,13 +279,13 @@ class SafetyGovernor(
                     """INSERT OR REPLACE INTO kind_breakers 
                        (kind, trip_count, last_trip_at, cooldown_until, consecutive_failures, attempts_total, failures_total)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    arrayOf(kind.name, newTripCount.toString(), now.toString(), cooldownUntil.toString(),
+                    arrayOf(key, newTripCount.toString(), now.toString(), cooldownUntil.toString(),
                         "0", attemptsTotal.toString(), failuresTotal.toString())
                 )
             } else {
                 writableDatabase.execSQL(
                     "UPDATE kind_breakers SET consecutive_failures = ?, attempts_total = ?, failures_total = ? WHERE kind = ?",
-                    arrayOf(consecutiveFailures.toString(), attemptsTotal.toString(), failuresTotal.toString(), kind.name)
+                    arrayOf(consecutiveFailures.toString(), attemptsTotal.toString(), failuresTotal.toString(), key)
                 )
             }
         } else {
@@ -266,7 +293,7 @@ class SafetyGovernor(
                 """INSERT OR REPLACE INTO kind_breakers 
                    (kind, trip_count, last_trip_at, cooldown_until, consecutive_failures, attempts_total, failures_total)
                    VALUES (?, 0, ?, 0, ?, 1, ?)""",
-                arrayOf(kind.name, now.toString(), if (success) "0" else "1", if (success) "0" else "1")
+                arrayOf(key, now.toString(), if (success) "0" else "1", if (success) "0" else "1")
             )
         }
         existing.close()

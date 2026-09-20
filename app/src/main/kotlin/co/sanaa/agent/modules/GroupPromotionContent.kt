@@ -3,21 +3,26 @@ package co.sanaa.agent.modules
 import co.sanaa.agent.api.SokoListing
 import co.sanaa.agent.core.growth.MarketGrowthReview
 
-/** Caption facts come from our own offering, never invented stock or competitor copy. */
+/** Group ads are brief invitations; detailed explanations belong in a requested reply. */
 data class GroupPromotionContent(val caption: String, val imageUrl: String) {
     companion object {
-        fun from(listing: SokoListing): GroupPromotionContent? {
+        fun from(listing: SokoListing, detailed: Boolean = false, variant: Int = 0): GroupPromotionContent? {
             val base = TikTokProductContent.from(listing) ?: return null
             val service = listing.raw.optString("offering_type") == "SERVICE"
-            val description = MarketGrowthReview.plainText(listing.description).take(560).trim()
+            val plain = MarketGrowthReview.plainText(listing.description).replace(Regex("\\s+"), " ").trim()
+            // One concrete fact, never a pasted catalogue paragraph. Longer copy is opt-in.
+            val limit = if (detailed) 240 else 65
+            val sentence = if (detailed) plain else plain.split(Regex("(?<=[.!?])\\s+")).firstOrNull().orEmpty()
+            val fact = if (sentence.length <= limit) sentence else sentence.take(limit - 1).substringBeforeLast(' ').trimEnd('.', ',', ';') + "…"
+            val angle=AudienceAdCopy.angle(listing,variant)
             val caption = buildString {
-                appendLine(listing.title.take(140))
-                if (description.isNotBlank()) { appendLine(); appendLine(description) }
-                appendLine()
-                appendLine("${if (service) "Listed price" else "Price"}: UGX ${listing.priceUgx}")
-                appendLine("${if (service) "Service details" else "Product details"}: ${base.shoppingUrl}")
-                append(if (service) "Tell us what you need and your preferred date; we’ll confirm the scope and quote."
-                    else "Interested? Tell us the quantity and your delivery area; we’ll confirm availability and delivery.")
+                appendLine(angle.opening)
+                appendLine(listing.title.take(80))
+                appendLine(AmaraAdSpec.price(listing))
+                if (fact.isNotBlank()) appendLine(fact)
+                appendLine(base.shoppingUrl)
+                append(angle.question)
+                if (!service) append(" Message us to confirm availability.")
             }
             return GroupPromotionContent(caption, base.imageUrl)
         }

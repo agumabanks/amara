@@ -9,6 +9,10 @@ import org.junit.Test
 
 class ModelSchemasTest {
 
+    @Test fun listingAnalysisCanHonestlyReportMissingMarketEvidence() {
+        assertTrue(ModelSchemas.LISTING_ANALYSIS.validate(goodListingAnalysis().put("price_position", "unknown")).isEmpty())
+    }
+
     @Test
     fun schemaForResolvesAllThirteenStages() {
         assertEquals(ModelSchemas.PLANNER_PLAN, ModelSchemas.schemaFor("planner"))

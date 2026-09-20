@@ -1,4 +1,6 @@
+import '../../widgets/task_swipe.dart';
 import 'dart:async';
+import 'package:flutter/services.dart';
 
 import 'package:flutter/material.dart';
 import '../../bridge/agent_channel.dart';
@@ -61,6 +63,111 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _bulkClose(List<Map<String, dynamic>> items) async {
+    final keys = items.take(1000).map((e) => '${e['key']}').toList();
+    final disposition = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Resolve ${keys.length} holds?'),
+        content: const Text(
+          'This closes the currently listed holds and retains their history. It will not send messages, verify delivery, or stop pending and running tasks.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'no_longer_needed'),
+            child: const Text('No longer needed'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'handled_elsewhere'),
+            child: const Text('Handled elsewhere'),
+          ),
+        ],
+      ),
+    );
+    if (disposition == null || !mounted) return;
+    try {
+      final count = await const MethodChannel('com.sanaa.agent/core')
+          .invokeMethod<int>('closeWorkReviews', {
+            'keys': keys,
+            'disposition': disposition,
+          });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${count ?? 0} holds closed. History retained; no messages sent.',
+          ),
+        ),
+      );
+      await _refresh();
+    } catch (_) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not finish bulk resolution. Refresh before retrying.',
+            ),
+          ),
+        );
+    }
+  }
+
+  Future<void> _closeReview(Map<String, dynamic> item) async {
+    final disposition = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Resolve this hold?'),
+        content: const Text(
+          'Check the WhatsApp conversation first. Closing this hold won’t send a message or mark delivery as verified. The review record will be kept.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Keep waiting'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'no_longer_needed'),
+            child: const Text('No reply needed'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'handled_elsewhere'),
+            child: const Text('I handled it'),
+          ),
+        ],
+      ),
+    );
+    if (disposition == null || !mounted) return;
+    try {
+      final closed = await AgentChannel.closeWorkReview(
+        item['key'] as String,
+        disposition,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            closed
+                ? 'Hold closed. No message was sent.'
+                : 'This hold changed. Please check the refreshed list.',
+          ),
+        ),
+      );
+      await _refresh();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('I couldn’t close this hold. Please try again.'),
+          ),
+        );
+      }
+    }
+  }
+
   List<Map<String, dynamic>> _maps(dynamic value) =>
       (value as List? ?? const [])
           .whereType<Map>()
@@ -74,6 +181,7 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
     final queue =
         (_autonomy['queue'] as Map?)?.cast<String, dynamic>() ?? const {};
     final queueItems = _maps(queue['items']);
+    final reviewItems = _maps(queue['needsReview']);
     final learning = (_autonomy['learning'] as Map?) ?? const {};
     final errors = _maps(learning['errors']);
     final schedules = [
@@ -88,12 +196,12 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Work Command',
+          'My work',
           style: TextStyle(fontWeight: FontWeight.w800),
         ),
         actions: [
           IconButton(
-            tooltip: 'Wake autonomous loop',
+            tooltip: 'Check for work now',
             onPressed: () async {
               await AgentChannel.wakeAutonomousLoop();
               await _refresh();
@@ -112,10 +220,76 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
                 children: [
                   _loopCard(loop, queueItems.length),
                   const SizedBox(height: 20),
+                  if (reviewItems.isNotEmpty) ...[
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: () => _bulkClose(reviewItems),
+                        icon: const Icon(Icons.done_all),
+                        label: Text(
+                          'Resolve listed holds (${reviewItems.length})',
+                        ),
+                      ),
+                    ),
+                    ExpansionTile(
+                      title: Text('Needs review (${reviewItems.length})'),
+                      subtitle: const Text(
+                        'Swipe to resolve a hold. Check the conversation first.',
+                      ),
+                      children: reviewItems
+                          .map(
+                            (item) => TaskSwipe(
+                              id: 'review-${item['key']}',
+                              onLeft: () => _closeReview(item),
+                              onRight: () => _closeReview(item),
+                              rightLabel: 'Resolve',
+                              child: ExpansionTile(
+                                leading: const Icon(
+                                  Icons.info_outline,
+                                  color: Colors.orange,
+                                ),
+                                title: Text(
+                                  (item['conversation'] as String?)
+                                              ?.isNotEmpty ==
+                                          true
+                                      ? item['conversation'] as String
+                                      : _pretty(item['kind']),
+                                ),
+                                subtitle: Text(_dateTime(item['reviewAt'])),
+                                childrenPadding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  0,
+                                  16,
+                                  16,
+                                ),
+                                children: [
+                                  if ((item['message'] as String?)
+                                          ?.isNotEmpty ==
+                                      true)
+                                    Text(
+                                      'Customer message: ${item['message']}',
+                                    ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    '${item['reason'] ?? 'Check the conversation and delivery status.'}',
+                                  ),
+                                  const SizedBox(height: 8),
+                                  TextButton(
+                                    onPressed: () => _closeReview(item),
+                                    child: const Text('Resolve this hold'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
                   _heading('TASK QUEUE', queueItems.length),
                   if (queueItems.isEmpty)
                     _empty(
-                      'No work is waiting. Sources propose tasks on the next pulse.',
+                      'Nothing is waiting. I’ll check for new work automatically.',
                     )
                   else
                     ...queueItems.map(_queueCard),
@@ -197,8 +371,10 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
               Expanded(
                 child: Text(
                   running
-                      ? 'AUTONOMOUS LOOP ONLINE'
-                      : 'AUTONOMOUS LOOP NOT RUNNING',
+                      ? (loop['ownerOn'] == false
+                            ? 'Amara is off'
+                            : 'I’m keeping track of work')
+                      : 'Work is paused',
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
@@ -220,7 +396,8 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
             style: const TextStyle(color: Colors.white60, fontSize: 12),
           ),
           Text(
-            loop['lastSummary']?.toString() ?? 'Waiting for telemetry',
+            loop['lastSummary']?.toString() ??
+                'I’ll show the latest update here.',
             style: const TextStyle(color: Colors.white38, fontSize: 12),
           ),
         ],
@@ -228,62 +405,124 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _archivePending(Map<String, dynamic> item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Archive this task?'),
+        content: const Text(
+          'Remove this pending task from the queue. Its record stays available. Future scheduled runs are unchanged.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep task'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Archive task'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final changed = await AgentChannel.archivePendingWork('${item['key']}');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            changed
+                ? 'Task archived.'
+                : 'Task already started or changed. Refresh to review.',
+          ),
+        ),
+      );
+      await _refresh();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not archive this task. Try again.'),
+          ),
+        );
+      }
+    }
+  }
+
   Widget _queueCard(Map<String, dynamic> item) {
     final requirements = (item['requires'] as List? ?? const []).join(', ');
     final payload = item['payload']?.toString() ?? '{}';
-    return Card(
-      color: const Color(0xFF121616),
-      margin: const EdgeInsets.only(bottom: 9),
-      child: ExpansionTile(
-        leading: const Icon(Icons.pending_actions, color: Color(0xFF50E3C2)),
-        title: Text(
-          _pretty(item['kind']),
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        subtitle: Text(
-          '${_pretty(item['domain'])} • ${_pretty(item['risk'])} risk • attempt ${item['attempt']}',
-          style: const TextStyle(color: Colors.white54, fontSize: 12),
-        ),
-        trailing: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+    return TaskSwipe(
+      id: 'pending-${item['key']}',
+      onLeft: () => _archivePending(item),
+      onRight: () => _archivePending(item),
+      rightLabel: 'Archive',
+      child: Card(
+        color: const Color(0xFF121616),
+        margin: const EdgeInsets.only(bottom: 9),
+        child: ExpansionTile(
+          leading: const Icon(Icons.pending_actions, color: Color(0xFF50E3C2)),
+          title: Text(
+            _pretty(item['kind']),
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          subtitle: Text(
+            '${_pretty(item['domain'])} • ${_pretty(item['risk'])} risk • attempt ${item['attempt']}',
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+          trailing: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'VALUE ${(item['valueKes'] as num?)?.toStringAsFixed(0) ?? '0'}',
+                style: const TextStyle(color: Color(0xFF50E3C2), fontSize: 11),
+              ),
+              const Icon(Icons.expand_more, color: Colors.white38),
+            ],
+          ),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           children: [
-            Text(
-              'VALUE ${(item['valueKes'] as num?)?.toStringAsFixed(0) ?? '0'}',
-              style: const TextStyle(color: Color(0xFF50E3C2), fontSize: 11),
+            _detailRow('Queue key', item['key']),
+            _detailRow('Created', _dateTime(item['createdAt'])),
+            _detailRow(
+              'Timing',
+              item['due'] == true
+                  ? 'Due now; device and policy checks still apply'
+                  : 'Waiting until ${_dateTime(item['notBefore'])}',
             ),
-            const Icon(Icons.expand_more, color: Colors.white38),
+            _detailRow('Deadline', _dateTime(item['deadline'])),
+            _detailRow(
+              'Expected phone time',
+              '${item['estimatedScreenSeconds'] ?? 0} seconds',
+            ),
+            _detailRow(
+              'Urgency half-life',
+              '${item['urgencyHalfLifeHours'] ?? 0} hours',
+            ),
+            _detailRow(
+              'Needs',
+              requirements.isEmpty ? 'No special capability' : requirements,
+            ),
+            _detailRow(
+              'Task input',
+              payload == '{}' ? 'No additional input' : payload,
+            ),
+            TextButton.icon(
+              onPressed: () => _archivePending(item),
+              icon: const Icon(Icons.archive_outlined),
+              label: const Text('Archive task'),
+            ),
+            const SizedBox(height: 6),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Value is a scheduling priority—not money earned.',
+                style: TextStyle(color: Colors.white30, fontSize: 11),
+              ),
+            ),
           ],
         ),
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        children: [
-          _detailRow('Queue key', item['key']),
-          _detailRow('Created', _dateTime(item['createdAt'])),
-          _detailRow('Deadline', _dateTime(item['deadline'])),
-          _detailRow(
-            'Expected phone time',
-            '${item['estimatedScreenSeconds'] ?? 0} seconds',
-          ),
-          _detailRow(
-            'Urgency half-life',
-            '${item['urgencyHalfLifeHours'] ?? 0} hours',
-          ),
-          _detailRow(
-            'Needs',
-            requirements.isEmpty ? 'No special capability' : requirements,
-          ),
-          _detailRow(
-            'Task input',
-            payload == '{}' ? 'No additional input' : payload,
-          ),
-          const SizedBox(height: 6),
-          const Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'Value is a scheduling priority—not money earned.',
-              style: TextStyle(color: Colors.white30, fontSize: 11),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -532,33 +771,40 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
     ),
   );
 
-  Widget _approvalCard(Map<String, dynamic> a) => _card(
-    Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          a['description']?.toString() ?? 'Approval',
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () => _decide(a, false),
-                child: const Text('Reject'),
+  Widget _approvalCard(Map<String, dynamic> a) => TaskSwipe(
+    id: 'approval-${a['id']}',
+    leftLabel: 'Reject',
+    rightLabel: 'Approve',
+    onLeft: () => _decide(a, false),
+    onRight: () => _decide(a, true),
+    child: _card(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            a['description']?.toString() ?? 'Approval',
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _decide(a, false),
+                  child: const Text('Reject'),
+                ),
               ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: FilledButton(
-                onPressed: () => _decide(a, true),
-                child: const Text('Approve'),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => _decide(a, true),
+                  child: const Text('Approve'),
+                ),
               ),
-            ),
-          ],
-        ),
-      ],
+            ],
+          ),
+        ],
+      ),
     ),
   );
   Widget _findingCard(Map<String, dynamic> f) => _card(
@@ -581,8 +827,53 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
     ),
   );
   Future<void> _decide(Map<String, dynamic> a, bool yes) async {
-    await AgentChannel.decideApproval((a['id'] as num).toInt(), yes);
-    _refresh();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(yes ? 'Approve this task?' : 'Reject this task?'),
+        content: SingleChildScrollView(
+          child: Text('${a['description'] ?? 'Review this task'}'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(yes ? 'Approve task' : 'Reject task'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final changed = await AgentChannel.decideApproval(
+        (a['id'] as num).toInt(),
+        yes,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            changed
+                ? (yes
+                      ? 'Approved. Execution still needs verification.'
+                      : 'Rejected. Review record retained.')
+                : 'This task changed. Refresh and review it again.',
+          ),
+        ),
+      );
+      await _refresh();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Decision could not be saved. Try again.'),
+          ),
+        );
+      }
+    }
   }
 
   Widget _heading(String text, int count) => Padding(

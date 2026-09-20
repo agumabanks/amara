@@ -28,6 +28,7 @@ class SokoEditModule(
     private val actions: AccessibilityActions,
     private val memory: AmaraMemory,
     private val sideEffects: SideEffectRunner = SideEffectRunner(SideEffectLedger.from(memory)),
+    private val shopScope: () -> String = { error("Verified shop identity required for edits") },
 ) {
     suspend fun proposeEdit(
         productName: String,
@@ -36,23 +37,25 @@ class SokoEditModule(
         proposedValue: String,
         risk: ActionRisk = ActionRisk.LOW_IMPACT_CHANGE,
     ): SokoEditResult {
+        val scope=shopScope()
         if (!actions.openSokoEditForm(productName)) {
             return SokoEditResult(false, productName, "Could not open the edit form for $productName.")
         }
         val before = readRelevantFields(fieldName)
         val observedCurrent = fieldValue(before, fieldName).ifBlank { currentValue }
         val beforeJson = buildJson(mapOf(fieldName to observedCurrent))
-        val afterJson = buildJson(mapOf(fieldName to proposedValue))
+        val afterJson = buildJson(mapOf(fieldName to proposedValue,"shop_scope" to scope))
         val description = "Edit $productName: change $fieldName from '$observedCurrent' to '$proposedValue'."
         memory.createApprovalRequest(
-            "edit_soko_listing", productName, description,
+            EDIT_CAPABILITY, productName, description,
             beforeJson, afterJson, risk,
         )
         return SokoEditResult(true, productName, "Prepared an edit proposal for $productName. The change to $fieldName is waiting for your approval.", before)
     }
 
     suspend fun applyApprovedEdit(productName: String, fieldName: String, newValue: String): SokoEditResult {
-        val afterJson = buildJson(mapOf(fieldName to newValue))
+        val scope=shopScope()
+        val afterJson = buildJson(mapOf(fieldName to newValue,"shop_scope" to scope))
         val approval = memory.matchingApprovedApproval(EDIT_CAPABILITY, productName, afterJson)
             ?: return SokoEditResult(false, productName, "No unexpired approval exactly matches $productName, $fieldName, and the proposed value. Nothing was changed.")
         val idempotencyKey = "soko-edit-approval:${approval.id}"
@@ -62,10 +65,11 @@ class SokoEditModule(
             target = productName,
             content = newValue,
             initiator = Initiator.OWNER_CHAT,
-            inputs = mapOf("product" to productName, "field" to fieldName, "value" to newValue),
+            inputs = mapOf("product" to productName, "field" to fieldName, "value" to newValue,"shop_scope" to scope),
+            preflight = { if(shopScope()!=scope) "Shop changed since edit approval" else null },
             approvalId = approval.id,
             approvalValidator = { id -> memory.approvalStillValid(id, EDIT_CAPABILITY, productName, afterJson) },
-            act = { performApprovedSave(productName, fieldName, newValue, approval.id) },
+            act = { performApprovedSave(productName, fieldName, newValue, approval.id, scope) },
             verify = { verifySavedField(productName, fieldName, newValue) },
         )
         val before = emptyMap<String, String>()
@@ -101,33 +105,20 @@ class SokoEditModule(
      * nothing was saved (form unreachable, field unset, or approval invalidated first).
      */
     // TRANSACTION-ACT: this helper runs exclusively inside the apply_soko_edit act lambda.
-    private suspend fun performApprovedSave(productName: String, fieldName: String, newValue: String, approvalId: Long): Boolean {
+    private suspend fun performApprovedSave(productName: String, fieldName: String, newValue: String, approvalId: Long, scope: String): Boolean {
         if (!actions.openSokoEditForm(productName)) return false
-        val fieldNameLow = fieldName.lowercase()
-        val set = when {
-            fieldNameLow.contains("name") || fieldNameLow == "product name" -> actions.setEditFieldByOrder(0, newValue)
-            fieldNameLow.contains("price") || fieldNameLow == "selling price" -> {
-                actions.scrollToEditField("Selling Price") && actions.setEditFieldByOrder(0, newValue)
-            }
-            fieldNameLow.contains("stock") || fieldNameLow == "stock qty" -> {
-                actions.scrollToEditField("Stock Qty") && actions.setEditFieldByOrder(0, newValue)
-            }
-            fieldNameLow.contains("description") || fieldNameLow == "product description" -> {
-                actions.scrollToEditField("Product Description") && actions.setEditFieldByOrder(0, newValue)
-            }
-            else -> false
-        }
+        val set=actions.setSokoEditField(fieldName,newValue)
         if (!set) return false
         // Consume the exact approval immediately before the save click so a crash can
         // never leave an unconsumed approval paired with a possibly completed save.
-        if (!memory.consumeApproval(approvalId)) return false
+        if (shopScope()!=scope || !memory.consumeApproval(approvalId)) return false
         return actions.transacted { saveEditForm() }
     }
 
     private suspend fun verifySavedField(productName: String, fieldName: String, newValue: String): VerificationEvidence {
         delay(HumanPacing.delayMillis(InteractionKind.NETWORK_CONTENT))
         // Reopen the saved form and compare the exact field against the approved value.
-        val reopened = actions.openSokoEditForm(productName)
+        val reopened = actions.openSokoEditForm(co.sanaa.agent.actions.SokoFieldBinding.reopenTitle(productName,fieldName,newValue))
         val evidence = SokoSaveVerification.evaluate(
             fieldName, newValue,
             SokoSaveVerification.ReopenObservation(

@@ -12,6 +12,8 @@ import android.content.Context
 class AmaraSettings(context: Context) {
 
     private val config = SecureConfig(context)
+    private val power = OwnerPower(context)
+    private val shorts = co.sanaa.agent.core.shorts.ShortsSettings(context)
 
     // --- TikTok Settings ---
     
@@ -135,17 +137,26 @@ class AmaraSettings(context: Context) {
         get() = config.quietHoursEnd
         set(value) { config.quietHoursEnd = value }
 
+    var nightlyDoctorEnabled: Boolean
+        get() = config.nightlyDoctorEnabled
+        set(value) { config.nightlyDoctorEnabled = value }
+
     /**
      * Get all settings as a map for the Flutter UI.
      */
-    fun getAll(): Map<String, Any> = mapOf(
+    fun getAll(): Map<String, Any> = shorts.all() + mapOf(
+        "amaraOn" to power.isOn(),
+        "publicAdWhatsApp" to config.publicAdWhatsApp,
+        "tikTokNotificationRepliesEnabled" to config.tikTokNotificationRepliesEnabled,
         "tikTokEnabled" to tikTokEnabled,
+        "tikTokStoriesEnabled" to config.tikTokStoriesEnabled,
         "tikTokIntervalMinutes" to tikTokInterval.minutes,
         "tikTokIntervalLabel" to tikTokInterval.label,
         "tikTokDailyCap" to tikTokDailyCap,
         "tikTokAlwaysOn" to tikTokAlwaysOn,
         "tikTokCommentsEnabled" to tikTokCommentsEnabled,
         "tikTokSocialEnabled" to tikTokSocialEnabled,
+        "managerWhatsApp" to config.managerWhatsApp,
         "whatsAppEnabled" to whatsAppEnabled,
         "whatsAppInboundEnabled" to whatsAppInboundEnabled,
         "whatsAppFollowUpsEnabled" to whatsAppFollowUpsEnabled,
@@ -166,6 +177,7 @@ class AmaraSettings(context: Context) {
         "maxScreenMinutesPerDay" to maxScreenMinutesPerDay,
         "quietHoursStart" to quietHoursStart,
         "quietHoursEnd" to quietHoursEnd,
+        "nightlyDoctorEnabled" to nightlyDoctorEnabled,
         "maxRetryCooldownMinutes" to config.maxRetryCooldownMinutes,
     )
 
@@ -173,12 +185,24 @@ class AmaraSettings(context: Context) {
      * Update a setting by key.
      */
     fun set(key: String, value: Any): Boolean {
+        if (key.startsWith("youtube")) return runCatching { shorts.set(key, value) }.getOrDefault(false)
         return try {
             when (key) {
+                "amaraOn" -> power.setOn(value as Boolean)
+                "managerWhatsApp" -> {
+                    val raw=value as? String ?: return false
+                    config.managerWhatsApp=if(raw.isBlank()) "" else co.sanaa.agent.modules.AmaraAdSpec.phone(raw) ?: return false
+                }
+                "tikTokNotificationRepliesEnabled" -> config.tikTokNotificationRepliesEnabled = value as Boolean
+                "publicAdWhatsApp" -> {
+                    val raw = value as? String ?: return false
+                    config.publicAdWhatsApp = if (raw.isBlank()) "" else co.sanaa.agent.modules.AmaraAdSpec.phone(raw) ?: return false
+                }
                 "maxRetryCooldownMinutes" -> config.maxRetryCooldownMinutes = (value as Number).toInt()
                 "tikTokEnabled" -> tikTokEnabled = value as Boolean
                 "tikTokIntervalMinutes" -> tikTokInterval = TikTokInterval.fromMinutes((value as Number).toLong())
                 "tikTokDailyCap" -> tikTokDailyCap = (value as Number).toInt()
+                "tikTokStoriesEnabled" -> config.tikTokStoriesEnabled = value as Boolean
                 "tikTokAlwaysOn" -> tikTokAlwaysOn = value as Boolean
                 "tikTokCommentsEnabled" -> tikTokCommentsEnabled = value as Boolean
                 "tikTokSocialEnabled" -> tikTokSocialEnabled = value as Boolean
@@ -205,6 +229,7 @@ class AmaraSettings(context: Context) {
                 "maxScreenMinutesPerDay" -> maxScreenMinutesPerDay = (value as Number).toInt()
                 "quietHoursStart" -> quietHoursStart = value as String
                 "quietHoursEnd" -> quietHoursEnd = value as String
+                "nightlyDoctorEnabled" -> nightlyDoctorEnabled = value as Boolean
                 else -> return false
             }
             true

@@ -6,6 +6,8 @@ import androidx.security.crypto.MasterKey
 import org.json.JSONObject
 
 class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
+    private val ownerPower = OwnerPower(context)
+    fun ownerAllowsWork(): Boolean = ownerPower.isOn()
     private val masterKey = if (!useEncryptedPrefs) null else MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
     private val prefs = if (!useEncryptedPrefs) {
         // Test/JVM mode only: production always constructs with encryption enabled.
@@ -20,6 +22,12 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
 
     var groqApiKey: String by stringPreference("groq_api_key")
     var groqApiKey2: String by stringPreference("groq_api_key_2")
+    /**
+     * Additional Groq credentials, supplied by the owner's encrypted remote
+     * configuration. Values are newline/comma separated and never exposed through
+     * the UI, logs, telemetry, or a model prompt.
+     */
+    var groqApiKeys: String by stringPreference("groq_api_keys")
     var groqEndpoint: String by stringPreference("groq_endpoint", DEFAULT_ENDPOINT)
     var groqModel: String by stringPreference("groq_model", DEFAULT_MODEL)
     var groqVisionModel: String by stringPreference("groq_vision_model")
@@ -30,6 +38,9 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
     var broadcastTime: String by stringPreference("broadcast_time", "07:00")
     var agentName: String by stringPreference("agent_name", "Amara")
     var businessName: String by stringPreference("business_name", "Sanaa Media")
+    var publicAdWhatsApp: String by stringPreference("public_ad_whatsapp")
+    var businessBrief: String by stringPreference("business_brief")
+    var managerWhatsApp: String by stringPreference("manager_whatsapp")
     var ownerPhone: String by stringPreference("owner_phone")
     var whatsAppGroupsJson: String by stringPreference("whatsapp_groups", "[]")
     var monitoredWhatsAppJson: String by stringPreference("monitored_whatsapp", "[]")
@@ -39,6 +50,9 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
     var sokoTerminalPin: String by stringPreference("soko_terminal_pin")
     var quietHoursStart: String by stringPreference("quiet_hours_start", "22:00")
     var quietHoursEnd: String by stringPreference("quiet_hours_end", "06:30")
+    var nightlyDoctorEnabled: Boolean
+        get() = prefs.getBoolean("nightly_doctor_enabled", false)
+        set(value) { prefs.edit().putBoolean("nightly_doctor_enabled", value).apply() }
     var maxRetryCooldownMinutes: Int
         get() = prefs.getInt("max_retry_cooldown_minutes", 1440).coerceIn(0, 1440)
         set(value) { prefs.edit().putInt("max_retry_cooldown_minutes", value.coerceIn(0, 1440)).apply() }
@@ -98,9 +112,17 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
         get() = prefs.getInt("tiktok_daily_cap", 10)
         set(value) { prefs.edit().putInt("tiktok_daily_cap", value.coerceIn(1, 144)).apply() }
 
+    var tikTokStoriesEnabled: Boolean
+        get() = prefs.getBoolean("tiktok_stories_enabled", false)
+        set(value) { prefs.edit().putBoolean("tiktok_stories_enabled", value).apply() }
+
     var tikTokAlwaysOn: Boolean
         get() = prefs.getBoolean("tiktok_always_on", false)
         set(value) { prefs.edit().putBoolean("tiktok_always_on", value).apply() }
+
+    var tikTokNotificationRepliesEnabled: Boolean
+        get() = prefs.getBoolean("tiktok_notification_replies_enabled", false)
+        set(value) { prefs.edit().putBoolean("tiktok_notification_replies_enabled", value).apply() }
 
     var tikTokSocialEnabled: Boolean
         get() = prefs.getBoolean("tiktok_social_enabled", false)
@@ -222,6 +244,7 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
     fun saveRemoteConfig(json: JSONObject) {
         json.nonBlank("groq_api_key")?.let { groqApiKey = it }
         json.nonBlank("groq_api_key_2")?.let { groqApiKey2 = it }
+        json.nonBlank("groq_api_keys")?.let { groqApiKeys = it }
         json.nonBlank("groq_endpoint")?.let { groqEndpoint = it }
         json.nonBlank("groq_model")?.let { groqModel = it }
         json.nonBlank("groq_vision_model")?.let { groqVisionModel = it }
@@ -233,6 +256,17 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
         if (json.has("order_threshold_ugx")) orderThresholdUgx = json.optLong("order_threshold_ugx", 500_000L)
         if (json.has("memory_backup_enabled")) memoryBackupEnabled = json.optBoolean("memory_backup_enabled", false)
         if (json.has("memory_auto_restore_enabled")) memoryAutoRestoreEnabled = json.optBoolean("memory_auto_restore_enabled", true)
+        if (json.has("manager_whatsapp")) managerWhatsApp = json.optString("manager_whatsapp").takeUnless { it == "null" }.orEmpty()
+        if (json.has("business_brief")) businessBrief = json.optString("business_brief").takeUnless { it == "null" }.orEmpty().take(4000)
+        if (json.has("whatsapp_automation_enabled")) whatsAppAutomationEnabled = json.optBoolean("whatsapp_automation_enabled")
+        if (json.has("whatsapp_inbound_enabled")) whatsAppInboundEnabled = json.optBoolean("whatsapp_inbound_enabled")
+        if (json.has("whatsapp_groups_enabled")) whatsAppGroupsEnabled = json.optBoolean("whatsapp_groups_enabled")
+        if (json.has("whatsapp_followups_enabled")) whatsAppFollowUpsEnabled = json.optBoolean("whatsapp_followups_enabled")
+        if (json.has("tiktok_test_mode")) tikTokTestMode = json.optBoolean("tiktok_test_mode")
+        if (json.has("tiktok_comments_enabled")) tikTokCommentsEnabled = json.optBoolean("tiktok_comments_enabled")
+        if (json.has("tiktok_social_enabled")) tikTokSocialEnabled = json.optBoolean("tiktok_social_enabled")
+        if (json.has("tiktok_stories_enabled")) tikTokStoriesEnabled = json.optBoolean("tiktok_stories_enabled")
+        if (json.has("tiktok_notification_replies_enabled")) tikTokNotificationRepliesEnabled = json.optBoolean("tiktok_notification_replies_enabled")
         json.optJSONArray("whatsapp_groups")?.let { whatsAppGroupsJson = it.toString() }
         json.optJSONArray("monitored_whatsapp")?.let { monitoredWhatsAppJson = it.toString() }
     }

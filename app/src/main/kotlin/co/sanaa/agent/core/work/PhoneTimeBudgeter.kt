@@ -116,8 +116,15 @@ class OwnerPresenceMonitor(
  */
 class PhoneTimeBudgeter(
     private val context: Context,
+    private val tikTokRemainingSeconds: () -> Int = { 0 },
     private val config: () -> Int = { 90 }, // max screen minutes per day
 ) {
+
+    /** Read-only budget evidence for the owner UI and durable deferment journal. */
+    fun remainingDailySeconds(snapshot: WorldSnapshot): Int =
+        ((config() - snapshot.screenMinutesUsedToday) * 60).coerceAtLeast(0)
+
+    fun dailyLimitMinutes(): Int = config().coerceIn(10, 1440)
 
     data class SessionGrant(
         val maxDurationSeconds: Int,
@@ -130,7 +137,11 @@ class PhoneTimeBudgeter(
      * Returns null if no session should be granted.
      */
     fun requestSession(snapshot: WorldSnapshot, bestItem: WorkItem): SessionGrant? {
-        val remainingSeconds = ((config() - snapshot.screenMinutesUsedToday) * 60).coerceAtLeast(0)
+        val remainingSeconds = if (Capability.SCREEN !in bestItem.requires) 300 else if (bestItem.kind == WorkKind.TIKTOK_POST_PUBLISH)
+            maxOf(remainingDailySeconds(snapshot), tikTokRemainingSeconds()) else remainingDailySeconds(snapshot)
+        // Customer replies receive one small emergency session after the ordinary
+        // daily budget is spent. SafetyGovernor accounts for this reserve durably.
+        val inboundReserve = bestItem.kind == WorkKind.WA_REPLY_INBOUND && !bestItem.payload.optBoolean("manager_report") && remainingSeconds < 180
 
         // Base slice by time of day
         val hour = snapshot.currentHour
@@ -155,14 +166,13 @@ class PhoneTimeBudgeter(
         // Apply battery cap
         val batteryMultiplier = when {
             snapshot.batteryPercent > 50 -> 1.0
-            snapshot.batteryPercent > 20 -> 0.5
-            snapshot.batteryPercent > 10 && snapshot.batteryPercent <= 20 -> 0.0
+            snapshot.batteryPercent > 15 -> 0.5
             else -> 0.0
         }
 
         val sessionLengthSeconds = minOf(
             (baseSliceSeconds * thermalMultiplier * batteryMultiplier).toInt(),
-            remainingSeconds
+            if (Capability.SCREEN !in bestItem.requires) 300 else if (inboundReserve) 180 else remainingSeconds
         )
 
         // Minimum 3 minutes to bother
@@ -176,6 +186,42 @@ class PhoneTimeBudgeter(
             hardStopAt = System.currentTimeMillis() + (sessionLengthSeconds * 1000L),
             grantId = "grant-${System.currentTimeMillis()}"
         )
+    }
+
+    /** Bounded admission scan. Deferred work remains durable and consumes no attempt. */
+    fun selectEligible(
+        queue: WorkQueue,
+        snapshot: WorldSnapshot,
+        now: Long = System.currentTimeMillis(),
+        successRate: (WorkKind) -> Double = { 0.5 },
+        timeFactor: (WorkKind) -> Double = { 1.0 },
+        onDeferred: (WorkItem, String) -> Unit = { _, _ -> },
+    ): SessionGrant? {
+        val excluded = mutableSetOf<String>()
+        repeat(50) {
+            val item = queue.peekBest(now, excludeKeys = excluded, successRate = successRate, timeFactor = timeFactor) ?: return null
+            val grant = requestSession(snapshot, item)
+            if (grant != null) return grant
+            // A short durable delay removes only this item from admission. Never
+            // rearm completed/uncertain effects or suppress its whole work kind.
+            excluded.add(item.dedupeKey)
+            queue.deferPending(item.dedupeKey, now + 60_000L)
+            onDeferred(item, denialReason(snapshot, item))
+        }
+        return null
+    }
+
+    fun denialReason(snapshot: WorldSnapshot, item: WorkItem): String = when {
+        snapshot.ownerActive -> "Phone is in use; waiting for the owner to finish"
+        snapshot.batteryPercent <= 15 -> "Battery at or below 15%; waiting for charge"
+        snapshot.thermalState == ThermalState.HOT && !item.payload.optBoolean("owner_canary") && !item.payload.optBoolean("owner_command") -> "Phone is too hot; waiting for it to cool"
+        snapshot.quietHours && !item.payload.optBoolean("owner_always_on") &&
+            (Capability.SCREEN in item.requires || Capability.CONSENT_TIER_2 in item.requires) -> "Quiet hours; scheduled screen work will resume afterwards"
+        item.kind == WorkKind.TIKTOK_POST_PUBLISH && remainingDailySeconds(snapshot) < 180 && tikTokRemainingSeconds() < 180 ->
+            "TikTok posting allowance and shared screen budget have less than three minutes remaining; waiting for daily renewal"
+        Capability.SCREEN in item.requires && remainingDailySeconds(snapshot) < 180 && item.kind != WorkKind.WA_REPLY_INBOUND ->
+            "Daily screen budget has less than three minutes remaining; waiting for renewal"
+        else -> "No safe session available; work remains queued for a later cycle"
     }
 
     /**

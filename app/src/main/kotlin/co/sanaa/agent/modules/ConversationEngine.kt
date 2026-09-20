@@ -161,7 +161,8 @@ class ConversationEngine(
             reporter.report("Action needed", "$customer — $reason", NotificationReporter.Priority.ACTION_NEEDED)
             runCatching { backend.escalate(ownerMessage, "conversation:$customer", decision.optString("escalation_urgency", "medium"), listOf(decision.optString("suggested_owner_reply", ""))) }
             backend.log(NAME, "escalate", "whatsapp", Redactor.redact(reason), notified, escalated = true, metadata = null)
-            return ModuleResult(NAME, true, "Escalated $classification from $customer")
+            return ModuleResult(NAME, notified, if(notified) "Escalated $classification from $customer"
+                else "Saved $classification from $customer for review; manager delivery is unverified")
         }
         val response = decision.getString("response")
         val chatTarget = inbound?.target ?: customer
@@ -205,7 +206,8 @@ class ConversationEngine(
             val ownerMessage = "SOKO MESSAGE from $customer\n${Redactor.redact(message)}\nSuggested reply: ${Redactor.redact(response)}"
             val notified = sendOwnerMessage(ownerMessage, "soko-relay_$customer")
             backend.log(NAME, "soko_relay", "soko", "Soko message relayed to the owner instead of auto-replying.", notified)
-            return ModuleResult(NAME, true, "Relayed the Soko message to you for a safe reply")
+            return ModuleResult(NAME, notified, if(notified) "Relayed the Soko message to you for a safe reply"
+                else "Soko message held for review; manager delivery is unverified")
         }
         val idempotencyKey = "reply:${chatTarget}:${ContentHashing.hash("$message|$response")}"
         val outcome = sideEffects.execute(
@@ -252,14 +254,18 @@ class ConversationEngine(
     }
 
     private suspend fun sendOwnerMessage(ownerMessage: String, purpose: String): Boolean {
+        val target=config.managerWhatsApp
+        if(target.isBlank()) return false
         val key = "owner-msg:$purpose:${ContentHashing.hash(ownerMessage)}"
         val outcome = sideEffects.execute(
             capabilityId = CapabilityIds.NOTIFY_OWNER_WHATSAPP,
             idempotencyKey = key,
-            target = config.ownerPhone,
+            target = target,
             content = ownerMessage,
-            act = { actions.transacted { sendToWhatsAppPhone(config.ownerPhone, ownerMessage) } },
-            verify = { TargetBoundVerifiers(actions).evaluateCurrentChat(config.ownerPhone, ownerMessage) },
+            inputs = mapOf("target" to target, "content" to ownerMessage, "manager_report" to true),
+            preflight = { if(config.managerWhatsApp!=target) "Manager destination changed" else null },
+            act = { actions.transacted { sendToWhatsAppPhone(target, ownerMessage) } },
+            verify = { TargetBoundVerifiers(actions).evaluateCurrentChat(target, ownerMessage) },
         )
         return outcome.verified
     }

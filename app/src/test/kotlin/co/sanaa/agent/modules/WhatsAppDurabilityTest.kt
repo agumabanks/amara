@@ -43,6 +43,29 @@ class WhatsAppDurabilityTest {
         }
         assertEquals("Customer", WhatsAppNotificationParser.parse(extras)!!.sender)
     }
+    @Test fun outgoingMessagesInBundledHistoryNeverBecomeCustomerReplies() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val customer = Person.Builder().setName("Customer").build()
+        val notification = Notification.Builder(context, "test")
+            .setStyle(Notification.MessagingStyle(Person.Builder().setName("Owner").build())
+                .addMessage("How much?", 10, customer)
+                .addMessage("UGX 50,000", 20, null as Person?))
+            .build()
+        assertEquals(listOf("How much?"), WhatsAppNotificationParser.parseAll(notification).map { it.message })
+        assertNull(WhatsAppNotificationParser.parse(notification))
+    }
+    @Test fun oldStructuredSenderFieldStillWorksOnModernAndroid() {
+        val extras = Bundle().apply {
+            putCharSequence(Notification.EXTRA_TITLE, "Customer")
+            putParcelableArray(Notification.EXTRA_MESSAGES, arrayOf(Bundle().apply {
+                putCharSequence("text", "Hello"); putLong("time", 10)
+                putCharSequence("sender", "Customer")
+            }))
+        }
+        assertEquals("Hello", WhatsAppNotificationParser.parse(extras)!!.message)
+        (extras.getParcelableArray(Notification.EXTRA_MESSAGES)!!.single() as Bundle).remove("sender")
+        assertNull(WhatsAppNotificationParser.parse(extras))
+    }
     @Test fun restartAndRegenerationCannotChangeBoundReply() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         context.deleteDatabase("amara_reply_drafts.db")

@@ -17,6 +17,9 @@ void main() {
           });
       await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
       await tester.pumpAndSettle();
+      await tester.tap(find.text('Soko Access'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Soko Terminal PIN'));
       await tester.tap(find.text('Soko Terminal PIN'));
       await tester.pumpAndSettle();
       expect(

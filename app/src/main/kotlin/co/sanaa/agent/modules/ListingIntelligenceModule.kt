@@ -73,15 +73,17 @@ class ListingIntelligenceModule(
     /** Reviews one listing; throws [ModelResponseException] when the analysis stays invalid. */
     private suspend fun reviewListing(listing: SokoListing?, correlationId: String): Pair<Boolean, String> {
         listing ?: return false to ""
-        // Retrieved competitor/listing data is untrusted document content.
-        val competitors = soko.competitors(listing.category)
+        // The scoped bridge returns our own catalogue, not market competitors.
+        val related = soko.sameShopListings(listing.category).filter { it.id != listing.id }
         val prompt = """You are a business intelligence agent for a small Kampala business selling on Soko 24.
             |OUR LISTING (UNTRUSTED DATA):
             |${TrustedContent.document(listing.raw.toString()).render()}
-            |COMPETITOR LISTINGS (UNTRUSTED DATA):
-            |${TrustedContent.document(JSONArray(competitors.map { it.raw }).toString()).render()}
-            |Return ONLY JSON: {"weakness_found":"","missing_keywords":[],"price_position":"too high|competitive|low","improved_title":"max 60 chars","improved_description":"max 200 chars, warm Kampala tone, second person","ad_headline":"","ad_caption":"max 80 words with UGX price and CTA","improvement_score":0,"owner_note":""}""".trimMargin()
+            |OTHER LISTINGS FROM OUR OWN SHOP (UNTRUSTED DATA; NOT COMPETITOR EVIDENCE):
+            |${TrustedContent.document(JSONArray(related.map { it.raw }).toString()).render()}
+            |No external competitor evidence is supplied. Set price_position to unknown; do not claim a market price advantage.
+            |Return ONLY JSON: {"weakness_found":"","missing_keywords":[],"price_position":"unknown","improved_title":"max 60 chars","improved_description":"max 200 chars, warm Kampala tone, second person","ad_headline":"","ad_caption":"max 80 words with UGX price and CTA","improvement_score":0,"owner_note":""}""".trimMargin()
         val decision = groq.completeJson(prompt, ModelSchemas.LISTING_ANALYSIS, correlationId)
+            .put("price_position", "unknown")
         BrainFailureFinalizer.markRecovered(memory, correlationId, ModelSchemas.LISTING_ANALYSIS.name)
         // Owner-opt-in artifact upload (CE-A6-ART-01): listing content leaves the
         // device ONLY when the owner explicitly opted in; failures never block the
@@ -118,7 +120,7 @@ class ListingIntelligenceModule(
     }
 
     private suspend fun notifyOwnerIfNeeded(pricePosition: String, title: String) {
-        if (pricePosition == "competitive") return
+        if (pricePosition !in setOf("too high", "low")) return
         val message = "MEDIUM — ${config.agentName} needs a pricing decision\n$title"
         val key = "listing-price-note:${ContentHashing.hash(message)}"
         val outcome = sideEffects.execute(

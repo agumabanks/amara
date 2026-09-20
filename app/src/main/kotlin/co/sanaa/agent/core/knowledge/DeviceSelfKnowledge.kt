@@ -82,6 +82,12 @@ class DeviceSelfKnowledge(private val context: Context) {
 
         return buildString {
             appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})")
+            val metrics=context.resources.displayMetrics
+            appendLine("Current app viewport: ${metrics.widthPixels}×${metrics.heightPixels}, density=${metrics.densityDpi}; use live visible node bounds, never another device's coordinates.")
+            for(pkg in listOf("com.soko24.soko_seller_terminal","com.zhiliaoapp.musically","com.whatsapp")) {
+                val version=runCatching { context.packageManager.getPackageInfo(pkg,0).versionName }.getOrNull()
+                appendLine("$pkg: ${version ?: "not installed"}")
+            }
             appendLine("Storage: ${freeMb}MB free / ${totalMb}MB total")
             appendLine("Known apps: ${knownApps.keys.joinToString(", ")}")
         }

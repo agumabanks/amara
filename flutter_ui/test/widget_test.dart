@@ -23,6 +23,7 @@ void main() {
           }
           if (call.method == 'syncConfig') return true;
           if (call.method == 'chatHistory') return <dynamic>[];
+          if (call.method == 'operationalHealth') return <String, dynamic>{};
           return false;
         });
   });
@@ -95,6 +96,7 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           if (call.method == 'chatHistory') return <dynamic>[];
+          if (call.method == 'operationalHealth') return <String, dynamic>{};
           if (call.method == 'autonomyStatus') {
             return <String, String>{
               'phase': 'analyze',
@@ -202,7 +204,7 @@ void main() {
 
     await tester.pumpWidget(const MaterialApp(home: WorkScreen()));
     await tester.pumpAndSettle();
-    expect(find.text('AUTONOMOUS LOOP ONLINE'), findsOneWidget);
+    expect(find.text('I’m keeping track of work'), findsOneWidget);
     expect(find.text('SCHEDULED & RECURRING'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('WORKFLOW TEMPLATES'),

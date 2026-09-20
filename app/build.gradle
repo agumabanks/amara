@@ -11,8 +11,8 @@ android {
         applicationId "co.sanaa.agent"
         minSdk 24
         targetSdk 36
-        versionCode 13
-        versionName "0.10.0"
+        versionCode 39
+        versionName "0.10.26"
 
         // The dedicated Oppo test device is ARM64. Keeping one ABI avoids a
         // universal APK that bundles three copies of Flutter and JNI engines.
@@ -37,7 +37,9 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
-            signingConfig signingConfigs.release
+            // Dedicated device updates must retain the installed signing identity.
+            // Opt-in only; normal distribution continues to use the release key.
+            signingConfig project.hasProperty("deviceContinuitySigning") ? signingConfigs.debug : signingConfigs.release
         }
     }
 
@@ -58,6 +60,7 @@ android {
 }
 
 dependencies {
+    implementation "com.google.mlkit:text-recognition:16.0.1"
     implementation project(":flutter")
     implementation "androidx.core:core-ktx:1.16.0"
     implementation "androidx.activity:activity-ktx:1.10.1"
@@ -65,6 +68,7 @@ dependencies {
     implementation "androidx.work:work-runtime-ktx:2.10.1"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    implementation "com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0"
     implementation "org.json:json:20250517"
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.robolectric:robolectric:4.14.1"

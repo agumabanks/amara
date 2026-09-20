@@ -47,6 +47,7 @@ class ListingIntelligenceWorker(context: Context, params: WorkerParameters) : Ag
 
 class OwnerCommandWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
+        if (!co.sanaa.agent.core.OwnerPower(applicationContext).isOn()) return Result.retry()
         val command = inputData.getString(COMMAND).orEmpty()
         val contactName = inputData.getString(CONTACT_NAME).orEmpty()
         val contactPhone = inputData.getString(CONTACT_PHONE).orEmpty()
@@ -94,7 +95,18 @@ class FollowUpWorker(context: Context, params: WorkerParameters) : AgentWorker(c
 }
 class HealthWorker(context: Context, params: WorkerParameters) : AgentWorker(context, params) {
     override suspend fun doWork(): Result {
+        // Inspect independently of the queue we are monitoring, including offline.
+        runtime.awaitReady().health.run()
         runtime.awaitReady().workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("health_check_due", ""))
+        return Result.success()
+    }
+}
+
+class NightlyDoctorWorker(context: Context, params: WorkerParameters) : AgentWorker(context, params) {
+    override suspend fun doWork(): Result {
+        val runtime = AgentRuntime.get(applicationContext).awaitReady()
+        val result = co.sanaa.agent.core.work.NightlyDoctorCleanup(applicationContext).run(runtime)
+        if (result.ran) runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("nightly_doctor_complete", ""))
         return Result.success()
     }
 }
@@ -128,7 +140,10 @@ object AgentWorkScheduler {
         // standing policy with an occurrence receipt.
         listOf("agent_conversations", "agent_follow_up", "agent_listings", "agent_morning").forEach(work::cancelUniqueWork)
         work.enqueueUniquePeriodicWork("agent_config", ExistingPeriodicWorkPolicy.UPDATE, periodic<ConfigSyncWorker>(12, TimeUnit.HOURS))
-        work.enqueueUniquePeriodicWork("agent_health", ExistingPeriodicWorkPolicy.UPDATE, periodic<HealthWorker>(30, TimeUnit.MINUTES))
+        work.enqueueUniquePeriodicWork("agent_health", ExistingPeriodicWorkPolicy.UPDATE,
+            PeriodicWorkRequestBuilder<HealthWorker>(30, TimeUnit.MINUTES).build())
+        work.enqueueUniquePeriodicWork("amara_nightly_doctor", ExistingPeriodicWorkPolicy.UPDATE,
+            PeriodicWorkRequestBuilder<NightlyDoctorWorker>(1, TimeUnit.HOURS).build())
         work.enqueueUniquePeriodicWork("amara_work_loop_pulse", ExistingPeriodicWorkPolicy.UPDATE, periodic<AmaraWorkPulseWorker>(15, TimeUnit.MINUTES))
         // Daily commercial cycle: morning plan / during-day recheck / end-of-day brief,
         // phased by the OWNER-configured timezone with per-day occurrence keys.
@@ -159,12 +174,11 @@ object AgentWorkScheduler {
         WorkManager.getInstance(context).cancelUniqueWork("amara_recurring_$taskId")
     }
 
-    /**
-     * Schedules TikTok test posting every 10 minutes.
-     */
+    /** Schedule the next governed TikTok opportunity at the owner's selected cadence. */
     fun scheduleTikTokTest(context: Context) {
+        val interval = co.sanaa.agent.core.SecureConfig(context).tikTokPostIntervalMinutes.coerceIn(10, 480)
         val work = OneTimeWorkRequestBuilder<co.sanaa.agent.workers.TikTokGrowthWorker>()
-            .setInitialDelay(1, TimeUnit.MINUTES)
+            .setInitialDelay(interval, TimeUnit.MINUTES)
             .addTag(co.sanaa.agent.workers.TikTokGrowthWorker.TAG)
             .setInputData(workDataOf("batch_id" to System.currentTimeMillis().toString()))
             .build()

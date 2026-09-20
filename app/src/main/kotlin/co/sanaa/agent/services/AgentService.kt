@@ -84,6 +84,7 @@ class AgentService : Service() {
         val manager = SelfHealingPermissionManager(applicationContext)
         var previouslyReady: Boolean? = null
         var lastCrashedReportAt = 0L
+        var lastHealthCheckAt = 0L
         while (true) {
             val diagnosis = manager.diagnoseAccessibility()
             val bound = AccessibilityAgentService.instance != null
@@ -128,6 +129,11 @@ class AgentService : Service() {
                     )
                     lastCrashedReportAt = now
                 }
+            }
+            if (System.currentTimeMillis() - lastHealthCheckAt >= 5 * 60_000L) {
+                lastHealthCheckAt = System.currentTimeMillis()
+                // Independent of work admission; periodic worker is the backup.
+                runCatching { runtime.health.run() }
             }
             previouslyReady = ready
             delay(30_000)

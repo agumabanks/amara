@@ -82,8 +82,8 @@ class ChatStore(context: Context) : SQLiteOpenHelper(context, "amara_chats.db", 
     
     fun getChatHistory(chatKey: String, limit: Int = 50): List<ChatMessage> {
         val cursor = readableDatabase.rawQuery(
-            "SELECT sender, direction, message_text, timestamp FROM chats WHERE chat_key = ? ORDER BY timestamp DESC LIMIT ?",
-            arrayOf(chatKey, limit.toString())
+            "SELECT sender, direction, message_text, timestamp FROM chats WHERE chat_key = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
+            arrayOf(chatKey, (System.currentTimeMillis() - 2 * 86_400_000L).toString(), limit.coerceIn(1, 200).toString())
         )
         val messages = mutableListOf<ChatMessage>()
         while (cursor.moveToNext()) {
@@ -259,7 +259,7 @@ class ChatStore(context: Context) : SQLiteOpenHelper(context, "amara_chats.db", 
     }
     
     fun getProducts(): List<String> {
-        val cursor = readableDatabase.rawQuery("SELECT name, price_ugx FROM offerings WHERE type = 'PRODUCT' ORDER BY synced_at DESC LIMIT 20", null)
+        val cursor = readableDatabase.rawQuery("SELECT name, price_ugx FROM offerings WHERE type = 'PRODUCT' ORDER BY synced_at DESC LIMIT 200", null)
         val items = mutableListOf<String>()
         while (cursor.moveToNext()) {
             val name = cursor.getString(0)
@@ -271,7 +271,7 @@ class ChatStore(context: Context) : SQLiteOpenHelper(context, "amara_chats.db", 
     }
     
     fun getServices(): List<String> {
-        val cursor = readableDatabase.rawQuery("SELECT name, price_ugx FROM offerings WHERE type = 'SERVICE' ORDER BY synced_at DESC LIMIT 20", null)
+        val cursor = readableDatabase.rawQuery("SELECT name, price_ugx FROM offerings WHERE type = 'SERVICE' ORDER BY synced_at DESC LIMIT 200", null)
         val items = mutableListOf<String>()
         while (cursor.moveToNext()) {
             val name = cursor.getString(0)

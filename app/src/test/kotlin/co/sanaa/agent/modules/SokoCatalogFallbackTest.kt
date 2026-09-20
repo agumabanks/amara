@@ -26,10 +26,10 @@ class SokoCatalogFallbackTest {
             config.agentToken = "test-token"
             config.deviceId = "test-device"
             config.backendUrl = server.url("/agent").toString().trimEnd('/')
-            server.enqueue(MockResponse().setBody("""{"data":[{"id":"1","title":"Test chair","price_ugx":123}]}"""))
-            server.enqueue(MockResponse().setBody("""{"data":[{"id":"2","title":"Test design","base_price":456,"currency":"UGX"}]}"""))
+            server.enqueue(MockResponse().setBody("""{"shop_identity":{"seller_id":12,"shop_id":34},"data":[{"id":"1","title":"Test chair","price_ugx":123}]}"""))
+            server.enqueue(MockResponse().setBody("""{"shop_identity":{"seller_id":12,"shop_id":34},"data":[{"id":"2","title":"Test design","base_price":456,"currency":"UGX"}]}"""))
             ChatStore(context).use { store ->
-                val result = SokoCatalogModule(AccessibilityActions(context), store, backend = SokoApiClient(config)).syncAll()
+                val result = SokoCatalogModule(AccessibilityActions(context), store, backend = SokoApiClient(config) { co.sanaa.agent.core.TerminalShopIdentity(12, 34, "Test shop", Long.MAX_VALUE, "test-assertion") }).syncAll()
                 assertTrue(result.complete)
                 assertEquals(1, result.productsSynced)
                 assertEquals(1, result.servicesSynced)

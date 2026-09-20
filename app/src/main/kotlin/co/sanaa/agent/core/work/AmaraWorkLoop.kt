@@ -48,8 +48,11 @@ class AmaraWorkLoop(
     private val executor: WorkExecutor,
     private val executionBoundary: suspend (suspend () -> WorkResult) -> WorkResult = { it() },
     private val onOutcome: (WorkResult) -> Unit = {},
+    private val onChosen: (WorkItem, Int) -> Unit = { _, _ -> },
     private val quietHoursStart: () -> String = { "22:00" },
     private val quietHoursEnd: () -> String = { "06:00" },
+    private val whatsAppAlwaysOn: () -> Boolean = { false },
+    private val tikTokAlwaysOn: () -> Boolean = { false },
     private val learnedTimeFactor: (WorkKind, Int) -> Double = { _, _ -> 1.0 },
     private val onReport: suspend (WorkReport) -> Unit = {},
     private val onEscalation: suspend (WorkItem, String) -> Unit = { _, _ -> },
@@ -83,6 +86,8 @@ class AmaraWorkLoop(
     private val failedCount = AtomicLong(0L)
     private val lastWakeReason = AtomicReference("not_started")
     private val lastSummary = AtomicReference("Waiting for the first autonomous cycle")
+    private val waitingReasons = linkedSetOf<String>()
+    private val blockers = WorkBlockers(executor.context)
 
     /**
      * Main loop entry point. Runs until cancelled.
@@ -102,7 +107,12 @@ class AmaraWorkLoop(
 
                 // SENSING: read world state
                 currentState = LoopState.SENSING
+                if (!co.sanaa.agent.core.OwnerPower(executor.context).isOn()) {
+                    lastSummary.set("Amara is off. Queued work is held until the owner turns me on.")
+                    continue
+                }
                 val snapshot = sense()
+                blockers.refreshBattery()
                 lastCycleAt.set(System.currentTimeMillis())
                 cycleCount.incrementAndGet()
 
@@ -124,31 +134,40 @@ class AmaraWorkLoop(
 
                 // Check governor state
                 if (governor.getState() == SafetyGovernor.GovernorState.HALTED) {
+                    blockers.flag("device:governor", "Autonomy", "The safety governor has halted autonomy.", true,
+                        "Open Work and review the safety governor before resuming.", global = true)
                     lastSummary.set("Cycle stopped at the safety governor because autonomy is halted")
                     continue
                 }
+                blockers.clear("device:governor")
+                blockers.clear("device:loop")
 
                 // PLANNING: discover work and check budget
                 currentState = LoopState.PLANNING
+                waitingReasons.clear()
                 queue.expireStale(System.currentTimeMillis())
                 discoverAndEnqueue(snapshot)
+                queue.refreshPendingChannelHours(whatsAppAlwaysOn(), tikTokAlwaysOn())
 
                 // Check if there's anything worth doing
                 val now = System.currentTimeMillis()
-                val bestItem = queue.peekBest(
-                    now, successRate = governor::successRate,
+                val grant = budgeter.selectEligible(
+                    queue, snapshot, now,
+                    successRate = governor::successRate,
                     timeFactor = { learnedTimeFactor(it, snapshot.currentHour) },
-                )
-                if (bestItem == null) {
-                    lastSummary.set("Cycle completed safely; no eligible work was waiting")
-                    continue
+                ) { item, reason ->
+                    blockers.deferred(item, reason)
+                    waitingReasons.add(reason)
+                    lastSummary.set("Waiting: " + waitingReasons.joinToString("; "))
+                    co.sanaa.agent.core.EvaluationJournal(executor.context).record("session_budget_deferred", item.dedupeKey,
+                        org.json.JSONObject().put("kind", item.kind.name).put("reason", reason)
+                            .put("battery_percent", snapshot.batteryPercent).put("thermal", snapshot.thermalState.name)
+                            .put("screen_minutes_used_today", snapshot.screenMinutesUsedToday)
+                            .put("screen_limit_minutes", budgeter.dailyLimitMinutes())
+                            .put("remaining_daily_seconds", budgeter.remainingDailySeconds(snapshot)))
                 }
-                // Scores order eligible work; they must not permanently veto an
-                // owner-enabled schedule after earlier failures lower its score.
-
-                val grant = budgeter.requestSession(snapshot, bestItem)
                 if (grant == null) {
-                    lastSummary.set("Cycle deferred ${bestItem.kind.name.lowercase()} because the phone-time budget did not grant a session")
+                    if (waitingReasons.isEmpty()) lastSummary.set("Cycle completed safely; no eligible work was waiting")
                     continue
                 }
 
@@ -175,6 +194,11 @@ class AmaraWorkLoop(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                runCatching { blockers.flag("device:loop", "Autonomous loop", "Cycle failed: ${e.javaClass.simpleName}.",
+                    action = "Amara will retry in 30 seconds. If this repeats, open Work for inspection.", global = true) }
+                lastSummary.set("Loop recovery waiting after ${e.javaClass.simpleName}; retry in 30 seconds")
+                co.sanaa.agent.core.EvaluationJournal(executor.context).record("loop_iteration_failed",
+                    fields = org.json.JSONObject().put("error_class", e.javaClass.simpleName))
                 android.util.Log.e("AmaraWorkLoop", "Loop iteration failed", e)
                 delay(30_000) // Wait 30s before retrying
             }
@@ -192,8 +216,14 @@ class AmaraWorkLoop(
     }
 
     /** Wait-free owner-visible proof that the autonomous supervisor is alive. */
-    fun diagnostics(): Map<String, Any> = mapOf(
-        "running" to (startedAt.get() > 0L && currentState != LoopState.HALTED),
+    fun diagnostics(): Map<String, Any> {
+        blockers.refreshBattery()
+        return mapOf(
+        "blockers" to blockers.rows(),
+        "tikTokPostingRemainingSeconds" to governor.tikTokPostingSecondsRemaining(),
+        "tikTokPostingLimitMinutes" to governor.tikTokPostingLimitMinutes(),
+        "ownerOn" to co.sanaa.agent.core.OwnerPower(executor.context).isOn(),
+        "running" to (co.sanaa.agent.core.OwnerPower(executor.context).isOn() && startedAt.get() > 0L && currentState != LoopState.HALTED),
         "state" to currentState.name,
         "startedAt" to startedAt.get(),
         "lastWakeAt" to lastWakeAt.get(),
@@ -207,6 +237,7 @@ class AmaraWorkLoop(
         "lastSummary" to lastSummary.get(),
         "sourceCount" to sources.size,
     )
+    }
 
     private suspend fun waitForWake(): WakeReason {
         return withTimeoutOrNull(queue.nextWakeDelayMillis(System.currentTimeMillis())) { wakeSignal.receive() }
@@ -283,8 +314,10 @@ class AmaraWorkLoop(
     ): List<WorkResult> {
         val results = mutableListOf<WorkResult>()
         val excludedKinds = mutableSetOf<WorkKind>()
+        val excludedKeys = mutableSetOf<String>()
 
         while (System.currentTimeMillis() < session.grant.hardStopAt && scope.isActive) {
+            if (!co.sanaa.agent.core.OwnerPower(executor.context).isOn()) break
             // Re-sense before every atomic item. A session grant is not permission
             // to ignore a phone that became hot or low on battery after it began.
             val liveSnapshot = sense()
@@ -293,10 +326,26 @@ class AmaraWorkLoop(
             val item = queue.peekBest(
                 System.currentTimeMillis(),
                 excludeKinds = excludedKinds,
+                excludeKeys = excludedKeys,
                 successRate = governor::successRate,
                 timeFactor = { learnedTimeFactor(it, session.snapshot.currentHour) },
             ) ?: break
-            if (System.currentTimeMillis() < inspectionUntil || liveSnapshot.ownerActive || shouldStopForDeviceHealth(liveSnapshot, item)) break
+            if (System.currentTimeMillis() < inspectionUntil || liveSnapshot.ownerActive) break
+            if (shouldStopForDeviceHealth(liveSnapshot, item)) {
+                blockers.deferred(item, budgeter.denialReason(liveSnapshot, item))
+                break
+            }
+
+            // A background/reply grant must never authorize a different item's
+            // quiet-hours or daily-budget bypass later in the same session.
+            if (budgeter.requestSession(liveSnapshot, item) == null) {
+                val reason = budgeter.denialReason(liveSnapshot, item)
+                blockers.deferred(item, reason)
+                excludedKeys.add(item.dedupeKey)
+                queue.deferPending(item.dedupeKey, System.currentTimeMillis() + 60_000L)
+                waitingReasons.add(reason)
+                continue
+            }
 
             // Check safety governor
             val sessionScreenSeconds = ((System.currentTimeMillis() - session.startTimeMs) / 1000).toInt()
@@ -307,10 +356,14 @@ class AmaraWorkLoop(
                 liveSnapshot,
             )
             if (!verdict.allowed) {
+                blockers.deferred(item, verdict.reason)
                 co.sanaa.agent.core.EvaluationJournal(executor.context).record("policy_deferred", item.dedupeKey,
                     org.json.JSONObject().put("kind",item.kind.name).put("reason",verdict.reason))
                 android.util.Log.i("AmaraWorkLoop", "Item blocked: ${verdict.reason}")
-                excludedKinds.add(item.kind)
+                val cooldown = governor.cooldownFor(item)
+                if (cooldown > 0) queue.deferPending(item.dedupeKey, System.currentTimeMillis() + cooldown)
+                waitingReasons.add(verdict.reason)
+                excludedKeys.add(item.dedupeKey)
                 continue
             }
 
@@ -320,10 +373,16 @@ class AmaraWorkLoop(
             if (Capability.SCREEN in item.requires) {
                 val availability = co.sanaa.agent.core.DeviceAvailabilityGuard.ensureAvailable(executor.context)
                 if (!availability.available) {
+                    blockers.deferred(item, availability.reason)
                     android.util.Log.i(
                         "AmaraWorkLoop",
                         "Screen work ${item.kind} deferred: ${availability.blocker} (${availability.reason})",
                     )
+                    queue.deferPending(item.dedupeKey, System.currentTimeMillis() + 60_000L)
+                    waitingReasons.add(availability.reason)
+                    lastSummary.set("Waiting: ${availability.reason}")
+                    co.sanaa.agent.core.EvaluationJournal(executor.context).record("device_unavailable", item.dedupeKey,
+                        org.json.JSONObject().put("kind", item.kind.name).put("blocker", availability.blocker.name))
                     excludedKinds.add(item.kind)
                     continue
                 }
@@ -331,26 +390,31 @@ class AmaraWorkLoop(
 
             // Execute
             if (!queue.markInFlight(item.dedupeKey)) continue
+            blockers.admitted(item)
             val result = kotlinx.coroutines.withTimeoutOrNull(itemTimeoutMs(item.kind)) {
                 executionBoundary {
                     try {
+                        safelyReport { onChosen(item, session.snapshot.currentHour) }
                         executor.execute(item)
                     } finally {
                         if (Capability.SCREEN in item.requires) ownerMonitor.rememberAutomationForeground()
                     }
                 }
             } ?: WorkResult(item, WorkStatus.ESCALATED,
+                screenSecondsUsed = if (Capability.SCREEN in item.requires) (itemTimeoutMs(item.kind) / 1000).toInt() else 0,
                 failure = FailureInfo(FailureClass.UNKNOWN,
                     "Task exceeded its time budget; saved for review. Any external effect is unproven and must not be blindly retried.", false))
             results.add(result)
             co.sanaa.agent.core.EvaluationJournal(executor.context).record("outcome", item.dedupeKey,
                 org.json.JSONObject().put("kind", item.kind.name).put("status", result.status.name)
                     .put("failure_class", result.failure?.klass?.name ?: "")
+                    .put("failure_reason", result.failure?.summary?.let(co.sanaa.agent.core.Redactor::redact) ?: "")
                     .put("observed_at", item.payload.optLong("inbound_observed_at")))
 
             // Handle result
             if (result.status == WorkStatus.DONE) {
                 queue.complete(item.dedupeKey)
+                safelyReport { blockers.outcome(result) }
             } else if (result.status == WorkStatus.FAILED || result.status == WorkStatus.SKIPPED || result.status == WorkStatus.PARTIAL) {
                 // Apply failure recovery
                 val recovery = executor.decideRecovery(item, result, item.attempt + 1)
@@ -368,10 +432,12 @@ class AmaraWorkLoop(
                     }
                     else -> {}
                 }
+                safelyReport { blockers.outcome(result, recovery) }
 
                 // Isolate this failing kind; do not strand unrelated work or replies.
                 if (item.kind != WorkKind.WA_REPLY_INBOUND) excludedKinds.add(item.kind)
             } else if (result.status == WorkStatus.ESCALATED) {
+                safelyReport { blockers.outcome(result) }
                 if(item.kind in setOf(WorkKind.WA_REPLY_INBOUND,WorkKind.WA_FOLLOWUP)) queue.requireReview(item,result.failure?.summary ?: "Unresolved reply")
                 else queue.complete(item.dedupeKey)
                 result.failure?.let { failure -> safelyReport { onEscalation(item, failure.summary) } }
@@ -428,7 +494,10 @@ class AmaraWorkLoop(
         }
         internal fun itemTimeoutMs(kind: WorkKind): Long = when (kind) {
             WorkKind.WA_REPLY_INBOUND -> 90_000L
-            WorkKind.TIKTOK_POST_PUBLISH, WorkKind.SOKO_AUDIT, WorkKind.SOKO_INVENTORY_CHECK -> 240_000L
+            WorkKind.YOUTUBE_SHORT_PUBLISH -> 600_000L
+            WorkKind.TIKTOK_POST_PUBLISH -> 480_000L // Render/session recovery plus the bounded publication transaction.
+            WorkKind.TIKTOK_STORY_PUBLISH -> 420_000L
+            WorkKind.SOKO_AUDIT, WorkKind.SOKO_INVENTORY_CHECK -> 240_000L
             else -> 120_000L
         }
 
@@ -443,11 +512,12 @@ class AmaraWorkLoop(
             (snapshot.thermalState == ThermalState.HOT &&
                 item?.payload?.optBoolean("owner_canary", false) != true &&
                 item?.payload?.optBoolean("owner_command", false) != true) ||
-                snapshot.batteryPercent <= 20
+                snapshot.batteryPercent <= 15
     }
 
     private fun buildReportSummary(results: List<WorkResult>): String {
-        if (results.isEmpty()) return "No work was done this session."
+        if (results.isEmpty()) return if(waitingReasons.isNotEmpty()) "Waiting: " + waitingReasons.joinToString("; ")
+            else "No eligible work is due."
         val succeeded = results.count { it.status == WorkStatus.DONE }
         val failed = results.count { it.status == WorkStatus.FAILED }
         val discovered = results.sumOf { it.discoveredWork.size }

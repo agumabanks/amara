@@ -57,7 +57,7 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: WhatsAppGroupsScreen()));
     await tester.pumpAndSettle();
     expect(find.textContaining('no matching recipient'), findsOneWidget);
-    final resume = find.text('Resume promotions after checking');
+    final resume = find.text('Resume ads');
     await tester.ensureVisible(resume);
     await tester.tap(resume);
     await tester.pumpAndSettle();

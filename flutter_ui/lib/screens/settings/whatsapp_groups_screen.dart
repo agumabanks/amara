@@ -42,6 +42,40 @@ class _WhatsAppGroupsScreenState extends State<WhatsAppGroupsScreen> {
     }
   }
 
+  Future<void> editProfile(
+    Map<String, dynamic> group,
+    String field,
+    String label,
+    String hint,
+  ) async {
+    final controller = TextEditingController(
+      text: group[field] as String? ?? '',
+    );
+    final value = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(label),
+        content: TextField(
+          controller: controller,
+          maxLength: 1000,
+          maxLines: 4,
+          decoration: InputDecoration(helperText: hint),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (value != null && mounted) await update(group, field, value);
+  }
+
   Future<void> update(
     Map<String, dynamic> group,
     String field,
@@ -99,13 +133,8 @@ class _WhatsAppGroupsScreenState extends State<WhatsAppGroupsScreen> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                const Text(
-                  'Choose where Amara listens, replies and promotes your catalogue. Global WhatsApp controls still apply.',
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Promotions rotate products and services with photos and details. Posting runs between 8 a.m. and 8 p.m., subject to consent, daily limits and verified delivery.',
-                ),
+                const Text('Choose which groups Amara manages.'),
+
                 if (error != null)
                   Padding(
                     padding: const EdgeInsets.all(12),
@@ -115,7 +144,7 @@ class _WhatsAppGroupsScreenState extends State<WhatsAppGroupsScreen> {
                   const Padding(
                     padding: EdgeInsets.all(24),
                     child: Text(
-                      'Groups appear after a WhatsApp notification or after you add them in Contacts. Newly observed groups need your permission before replies or ads.',
+                      'No groups yet. Receive a group notification or add one in Contacts.',
                     ),
                   ),
                 ...groups.map((g) {
@@ -144,47 +173,114 @@ class _WhatsAppGroupsScreenState extends State<WhatsAppGroupsScreen> {
                           Text(
                             'Identity …${id.length > 8 ? id.substring(id.length - 8) : id} · ${g['originVerified'] == true ? 'Observed from WhatsApp' : 'Contact directory'}',
                           ),
+                          TextButton(
+                            onPressed: () => editProfile(g, 'name', 'Correct saved group name', 'Copy the complete name from WhatsApp. The next check verifies access.'),
+                            child: const Text('Correct saved name'),
+                          ),
                           TextButton.icon(
                             onPressed: () => openGroup(id),
                             icon: const Icon(Icons.open_in_new),
-                            label: const Text('Open group to identify it'),
+                            label: const Text('Open group'),
                           ),
                           Text(
                             'Last promotion: ${g['lastOutcome'] ?? 'No scheduled outcome yet'}',
                           ),
+                          if ((g['lastPromotionAt'] as num? ?? 0) > 0)
+                            Text(
+                              'Last confirmed: ${DateTime.fromMillisecondsSinceEpoch((g['lastPromotionAt'] as num).toInt()).toLocal()}',
+                            ),
                           if ((g['lastReason'] as String? ?? '').isNotEmpty)
                             Text('Details: ${g['lastReason']}'),
+                          TextButton.icon(
+                            onPressed: () async {
+                              try {
+                                await channel.invokeMethod(
+                                  'checkWhatsappGroup',
+                                  {'id': id},
+                                );
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Read-only group check queued. Refresh for its result.',
+                                    ),
+                                  ),
+                                );
+                              } catch (_) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Could not queue the check. Review group permission.',
+                                      ),
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                            icon: const Icon(Icons.fact_check_outlined),
+                            label: const Text('Check exact group · no send'),
+                          ),
+                          if ((g['lastCheck']?.toString() ?? '').isNotEmpty)
+                            Text('Latest check: ${g['lastCheck']}'),
                           if (g['paused'] == true) ...[
                             const Text(
-                              'Promotions paused after a delivery blocker. Check the group destination and posting permission before resuming.',
+                              'Ads held · automatic verification every 30 minutes.',
                             ),
                             TextButton(
                               onPressed: g['promote'] == true
                                   ? () => update(g, 'resume', true)
                                   : null,
-                              child: const Text(
-                                'Resume promotions after checking',
-                              ),
+                              child: const Text('Resume ads'),
                             ),
                           ] else if ((g['nextPromotionAt'] as num? ?? 0) > 0)
                             Text(
-                              'Next eligible: ${DateTime.fromMillisecondsSinceEpoch((g['nextPromotionAt'] as num).toInt()).toLocal()}',
+                              (g['nextPromotionAt'] as num).toInt() <=
+                                      DateTime.now().millisecondsSinceEpoch
+                                  ? 'Due · awaiting scheduler'
+                                  : 'Next: ${DateTime.fromMillisecondsSinceEpoch((g['nextPromotionAt'] as num).toInt()).toLocal()}',
                             ),
+                          ExpansionTile(
+                            tilePadding: EdgeInsets.zero,
+                            title: const Text('Topics & rules'),
+                            children: [
+                              for (final field in const {
+                                'purpose': 'Group purpose',
+                                'rules': 'Participation rules',
+                                'offerKeywords': 'Offer topics',
+                                'replyKeywords': 'Reply topics',
+                              }.entries)
+                                ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(field.value),
+                                  subtitle: Text(
+                                    (g[field.key] as String? ?? '').isEmpty
+                                        ? 'Not set'
+                                        : g[field.key] as String,
+                                  ),
+                                  trailing: const Icon(Icons.edit_outlined),
+                                  onTap: () => editProfile(
+                                    g,
+                                    field.key,
+                                    field.value,
+                                    field.key.endsWith('Keywords')
+                                        ? 'Comma-separated topics. Blank allows all topics.'
+                                        : 'Owner guidance for this group only.',
+                                  ),
+                                ),
+                            ],
+                          ),
                           SwitchListTile(
                             contentPadding: EdgeInsets.zero,
                             title: const Text('Listen'),
-                            subtitle: const Text(
-                              'Watch incoming group messages',
-                            ),
+                            subtitle: const Text('Read new messages'),
                             value: g['listen'] == true,
                             onChanged: (v) => update(g, 'listen', v),
                           ),
                           SwitchListTile(
                             contentPadding: EdgeInsets.zero,
                             title: const Text('Reply'),
-                            subtitle: const Text(
-                              'Respond to incoming messages in this group',
-                            ),
+                            subtitle: const Text('Answer relevant questions'),
                             value: g['reply'] == true,
                             onChanged: g['listen'] == true
                                 ? (v) => update(g, 'reply', v)
@@ -192,9 +288,9 @@ class _WhatsAppGroupsScreenState extends State<WhatsAppGroupsScreen> {
                           ),
                           SwitchListTile(
                             contentPadding: EdgeInsets.zero,
-                            title: const Text('Scheduled promotions'),
+                            title: const Text('Post ads'),
                             subtitle: const Text(
-                              'Authorize product and service promotions here',
+                              'Designed product and service posters',
                             ),
                             value: g['promote'] == true,
                             onChanged: (v) => update(g, 'promote', v),
@@ -231,7 +327,7 @@ class _WhatsAppGroupsScreenState extends State<WhatsAppGroupsScreen> {
                             const Padding(
                               padding: EdgeInsets.only(top: 8),
                               child: Text(
-                                'Promotions are held until the destination can be selected uniquely. Amara will not choose between groups with the same name.',
+                                'Check group identity before posting ads.',
                               ),
                             ),
                         ],

@@ -79,6 +79,7 @@ class ProductionPathIntegrationTest {
         config.groqApiKey = "test-key"
         config.agentToken = "test-agent-token"
         config.ownerPhone = "+256700000001"
+        config.managerWhatsApp = "+256700000001"
         // The benign-flow customer holds explicit REPLY consent in the canonical directory
         // (single authority for reply decisions).
         val directory = co.sanaa.agent.core.ContactDirectory(
@@ -103,14 +104,14 @@ class ProductionPathIntegrationTest {
 
         val backend = BackendSync(context, config, memory)
         val actions = AccessibilityActions(context, memory)
-        val verifier = ActionVerifier(actions, SokoApiClient(config), backend)
+        val verifier = ActionVerifier(actions, SokoApiClient(config) { co.sanaa.agent.core.TerminalShopIdentity(12, 34, "Test shop", Long.MAX_VALUE, "test-assertion") }, backend)
         val state = ModuleStateStore(context)
         val reporter = NotificationReporter(context)
         val queue = TaskQueue()
         val runner = SideEffectRunner(SideEffectLedger.from(memory))
         lastState = state
         conversation = ConversationEngine(
-            config, SokoApiClient(config), GroqClient(config, memory, allowInsecureTestEndpoint = true), backend,
+            config, SokoApiClient(config) { co.sanaa.agent.core.TerminalShopIdentity(12, 34, "Test shop", Long.MAX_VALUE, "test-assertion") }, GroqClient(config, memory, allowInsecureTestEndpoint = true), backend,
             actions, verifier, state, reporter, memory, queue, runner, ChatStore(context),
         )
     }
@@ -132,7 +133,7 @@ class ProductionPathIntegrationTest {
         val items = messages.joinToString(",") { m ->
             """{"id":"$m","buyer_id":"$buyerId","message":"$m","conversation_id":"c1"}"""
         }
-        return MockResponse().setBody("""{"data":[$items]}""")
+        return MockResponse().setBody("""{"shop_identity":{"seller_id":12,"shop_id":34},"data":[$items]}""")
     }
 
     @Test
@@ -178,7 +179,8 @@ class ProductionPathIntegrationTest {
         // …and the Soko reply routed to the OWNER channel inside the universal
         // transaction (D-001 screen-first); with Accessibility absent it finalized
         // FAILED — provably no blind send into an unknown surface.
-        assertTrue(results.first().summary.contains("Relayed"))
+        assertTrue(!results.first().success)
+        assertTrue(results.first().summary.contains("delivery is unverified"))
         val cursor = memory.readableDatabase.rawQuery(
             "SELECT state FROM side_effect_transactions WHERE idempotency_key LIKE 'owner-msg:soko-relay_Buyer 7:%'",
             null,
@@ -198,7 +200,8 @@ class ProductionPathIntegrationTest {
         )
         val results = conversation.pollSoko()
                 assertEquals(1, results.size)
-        assertTrue(results.first().success)
+        assertTrue(!results.first().success)
+        assertTrue(results.first().summary.contains("delivery is unverified"))
         // Exactly one model call; escalation content went only through the owner channel.
         assertEquals(1, completionCalls.get())
         val keys = memory.activeCommitments().size // sanity: workflow table untouched by chat flow

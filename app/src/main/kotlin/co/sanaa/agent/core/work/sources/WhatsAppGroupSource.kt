@@ -13,7 +13,7 @@ class WhatsAppGroupSource(
 ) : WorkSource {
     override val domain = Domain.WHATSAPP
     override suspend fun propose(snapshot: WorldSnapshot): List<WorkItem> {
-        if (!enabled() || !snapshot.canSendExternal || snapshot.currentHour !in 8..20) return emptyList()
+        if (!enabled() || !snapshot.canSendExternal || snapshot.quietHours) return emptyList()
         return groups().distinct().mapNotNull { group ->
             val due=nextDue?.invoke(group)
             if(due!=null && due>System.currentTimeMillis()) return@mapNotNull null

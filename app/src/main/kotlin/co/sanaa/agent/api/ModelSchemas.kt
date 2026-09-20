@@ -275,7 +275,7 @@ object ModelSchemas {
             "ad_caption" to FieldType.STRING,
             "improvement_score" to FieldType.NUMBER,
         ),
-        enums = mapOf("price_position" to setOf("too high", "competitive", "low")),
+        enums = mapOf("price_position" to setOf("too high", "competitive", "low", "unknown")),
         optionalFields = setOf("owner_note"),
         requiredNonBlank = setOf("improved_title", "improved_description", "ad_headline", "ad_caption"),
         numberRanges = mapOf("improvement_score" to 0.0..100.0),

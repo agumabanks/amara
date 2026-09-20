@@ -67,6 +67,11 @@ class CommitmentSummary {
 }
 
 class AgentChannel {
+  static Future<bool> chooseSokoSharedFolder() async =>
+      await _channel.invokeMethod<bool>('chooseSokoSharedFolder') ?? false;
+  static Future<int> exportSokoSharedMedia() async =>
+      await _channel.invokeMethod<int>('exportSokoSharedMedia') ?? 0;
+
   AgentChannel._();
   static const _channel = MethodChannel('com.sanaa.agent/core');
   static Future<PermissionState> permissionStatus() async =>
@@ -118,6 +123,16 @@ class AgentChannel {
       await _channel.invokeMethod<String>('testGroq') ?? 'Connected';
   static Future<bool> startAgent() async =>
       await _channel.invokeMethod<bool>('startAgent') ?? false;
+  static Future<Map<String, dynamic>> inspectTerminalShop() async =>
+      Map<String, dynamic>.from(
+        await _channel.invokeMethod<Map>('inspectTerminalShop') ?? {},
+      );
+
+  static Future<String> pairingDeviceId() async =>
+      await _channel.invokeMethod<String>('pairingDeviceId') ?? '';
+  static Future<bool> pairDevice(String code) async =>
+      await _channel.invokeMethod<bool>('pairDevice', {'code': code}) ?? false;
+
   static Future<bool> setupComplete() async =>
       await _channel.invokeMethod<bool>('setupComplete') ?? false;
   static Future<bool> syncConfig() async =>
@@ -126,6 +141,10 @@ class AgentChannel {
     final value = await _channel.invokeMethod<String>('agentStatus') ?? '{}';
     return jsonDecode(value) as Map<String, dynamic>;
   }
+
+  static Future<bool> archivePendingWork(String key) async =>
+      await _channel.invokeMethod<bool>('archivePendingWork', {'key': key}) ??
+      false;
 
   static Future<Map<String, dynamic>> submitTask({
     required String command,
@@ -159,6 +178,18 @@ class AgentChannel {
         'autonomyStatus',
       ))?.cast<String, dynamic>() ??
       const {'phase': 'idle', 'detail': 'Ready for the next thing'};
+
+  static Future<Map<String, dynamic>> operationalHealth() async =>
+      (await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'operationalHealth',
+      ))?.cast<String, dynamic>() ??
+      const {'healthy': false, 'blockers': []};
+
+  static Future<Map<String, dynamic>> runOperationalHealth() async =>
+      (await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'runOperationalHealth',
+      ))?.cast<String, dynamic>() ??
+      const {'success': false};
 
   static Future<Map<String, dynamic>> runtimeStatusSnapshot() async =>
       (await _channel.invokeMethod<Map<dynamic, dynamic>>(
@@ -395,12 +426,14 @@ class AgentChannel {
   static Future<Map<String, dynamic>> backupMemoryNow() async =>
       (await _channel.invokeMethod<Map<dynamic, dynamic>>(
         'backupMemoryNow',
-      ))?.cast<String, dynamic>() ?? const {'success': false, 'message': 'No result'};
+      ))?.cast<String, dynamic>() ??
+      const {'success': false, 'message': 'No result'};
 
   static Future<Map<String, dynamic>> restoreMemoryNow() async =>
       (await _channel.invokeMethod<Map<dynamic, dynamic>>(
         'restoreMemoryNow',
-      ))?.cast<String, dynamic>() ?? const {'success': false, 'message': 'No result'};
+      ))?.cast<String, dynamic>() ??
+      const {'success': false, 'message': 'No result'};
 
   static Future<Map<String, dynamic>> runDepartmentWorkflow({
     required String workflowId,
@@ -414,7 +447,8 @@ class AgentChannel {
           'target': target,
           if (budgetUgx != null) 'budgetUgx': budgetUgx,
         },
-      ))?.cast<String, dynamic>() ?? const {'state': 'failed'};
+      ))?.cast<String, dynamic>() ??
+      const {'state': 'failed'};
 
   static Future<String> marketReport() async =>
       await _channel.invokeMethod<String>('marketReport') ??
@@ -434,6 +468,13 @@ class AgentChannel {
 
   static Future<bool> wakeAutonomousLoop() async =>
       await _channel.invokeMethod<bool>('wakeAutonomousLoop') ?? false;
+
+  static Future<bool> closeWorkReview(String key, String disposition) async =>
+      await _channel.invokeMethod<bool>('closeWorkReview', {
+        'key': key,
+        'disposition': disposition,
+      }) ??
+      false;
 
   static Future<void> openAccessibilitySettings() async =>
       await _channel.invokeMethod<void>('openAccessibility');

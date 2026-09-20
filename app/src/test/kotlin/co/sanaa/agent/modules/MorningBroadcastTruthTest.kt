@@ -96,7 +96,7 @@ class MorningBroadcastTruthTest {
                 path.contains("/v1/chat/completions") -> groqResponse()
                 path.contains("/soko/listings") -> MockResponse()
                     .setHeader("Content-Type", "application/json")
-                    .setBody("""{"data":[$listingsJson]}""")
+                    .setBody("""{"shop_identity":{"seller_id":12,"shop_id":34},"data":[$listingsJson]}""")
                 else -> MockResponse().setResponseCode(200).setBody("{}")
             }
         }
@@ -116,9 +116,9 @@ class MorningBroadcastTruthTest {
     private fun module(initiators: BroadcastInitiators = BroadcastInitiators()): MorningBroadcastModule {
         val backend = BackendSync(context, config, memory)
         val actions = AccessibilityActions(context, memory)
-        val verifier = ActionVerifier(actions, SokoApiClient(config), backend)
+        val verifier = ActionVerifier(actions, SokoApiClient(config) { co.sanaa.agent.core.TerminalShopIdentity(12, 34, "Test shop", Long.MAX_VALUE, "test-assertion") }, backend)
         return MorningBroadcastModule(
-            config, SokoApiClient(config), GroqClient(config, memory, allowInsecureTestEndpoint = true),
+            config, SokoApiClient(config) { co.sanaa.agent.core.TerminalShopIdentity(12, 34, "Test shop", Long.MAX_VALUE, "test-assertion") }, GroqClient(config, memory, allowInsecureTestEndpoint = true),
             backend, actions, verifier, state, NotificationReporter(context),
             SideEffectRunner(SideEffectLedger.from(memory)), memory, initiators,
         )

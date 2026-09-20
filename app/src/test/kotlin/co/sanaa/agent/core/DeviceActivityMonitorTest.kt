@@ -160,25 +160,42 @@ class DeviceAvailabilityGuardTest {
     }
 
     @Test
-    fun nonsecureKeyguardIsNotTreatedAsACredentialBarrier() = runBlocking {
+    fun nonsecureKeyguardIsUnavailableWithoutClaimingCredentialBarrier() = runBlocking {
         setInteractive(true)
         setLocked(true)
         setSecure(false)
         val result = guard()
-        assertTrue(result.available)
-        assertEquals(AvailabilityBlocker.NONE, result.blocker)
+        assertFalse(result.available)
+        assertEquals(AvailabilityBlocker.NONSECURE_KEYGUARD, result.blocker)
     }
 
     @Test
-    fun nonsecureKeyguardDoesNotRequirePollingOrCredentialEntry() = runBlocking {
-        setInteractive(true)
-        setLocked(true)
-        setSecure(false)
-        val sleeper = ScriptedSleeper { }
-        val result = guard(sleeper)
+    fun failedNonsecureDismissalRemainsBlocked() = runBlocking {
+        setInteractive(true); setLocked(true); setSecure(false)
+        val result = DeviceAvailabilityGuard.ensureAvailable(context, sleeper = {},
+            dismissNonsecure = { false })
+        assertFalse(result.available)
+        assertEquals(AvailabilityBlocker.NONSECURE_KEYGUARD, result.blocker)
+    }
+
+    @Test
+    fun nonsecureDismissalMustBeObservedBeforeWorkIsAllowed() = runBlocking {
+        setInteractive(true); setLocked(true); setSecure(false)
+        var requested = false
+        val result = DeviceAvailabilityGuard.ensureAvailable(context,
+            sleeper = { setLocked(false) }, dismissNonsecure = { requested = true; true })
+        assertTrue(requested)
         assertTrue(result.available)
-        assertEquals(AvailabilityBlocker.NONE, result.blocker)
-        assertEquals("only the final double-check should wait", 1, sleeper.calls)
+    }
+
+    @Test
+    fun secureKeyguardNeverRequestsDismissal() = runBlocking {
+        setInteractive(true); setLocked(true); setSecure(true)
+        var requested = false
+        val result = DeviceAvailabilityGuard.ensureAvailable(context,
+            sleeper = {}, dismissNonsecure = { requested = true; true })
+        assertFalse(requested)
+        assertEquals(AvailabilityBlocker.SECURE_KEYGUARD, result.blocker)
     }
 
     @Test

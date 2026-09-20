@@ -81,6 +81,7 @@ object DeviceAvailabilityGuard {
         sleeper: suspend (Long) -> Unit = { delay(it) },
         pollAttempts: Int = 20,
         pollIntervalMs: Long = 250,
+        dismissNonsecure: (Context) -> Boolean = WorkUnlockActivity::request,
     ): DeviceAvailability {
         if (DeviceActivityMonitor.isUserLikelyActive()) {
             return DeviceAvailability(false, AvailabilityBlocker.OWNER_ACTIVE, OWNER_ACTIVE_REASON)
@@ -101,10 +102,15 @@ object DeviceAvailabilityGuard {
             if (keyguard.isKeyguardSecure) {
                 return DeviceAvailability(false, AvailabilityBlocker.SECURE_KEYGUARD, SECURE_KEYGUARD_REASON)
             }
-            // A swipe-only surface is not a credential boundary. ColorOS can keep
-            // isKeyguardLocked=true in this process even after dumpsys reports
-            // deviceLocked=0; allow foreground work through the activity's existing
-            // SHOW_WHEN_LOCKED/DISMISS_KEYGUARD flags.
+            // Request the normal Android dismissal, then require observed unlock.
+            // A denied request never grants availability or consumes a work attempt.
+            if (dismissNonsecure(context)) {
+                var attempts = 0
+                while (keyguard.isKeyguardLocked && !keyguard.isKeyguardSecure && attempts < pollAttempts.coerceIn(0, 12)) {
+                    sleeper(pollIntervalMs)
+                    attempts++
+                }
+            }
         }
         // FINAL observation: availability must hold TWICE, separated by a tiny gap,
         // immediately before reporting available=true.
@@ -113,12 +119,12 @@ object DeviceAvailabilityGuard {
         if (!interactiveOnce) {
             return DeviceAvailability(false, AvailabilityBlocker.SCREEN_OFF, "The phone screen turned off again before work could start.")
         }
-        if (lockedOnce && keyguard.isKeyguardSecure) return relockedResult(keyguard)
+        if (lockedOnce) return relockedResult(keyguard)
         sleeper(FINAL_CHECK_GAP_MS)
         val interactiveTwice = ScreenController.isScreenOn(context)
         val lockedTwice = keyguard.isKeyguardLocked
         return when {
-            interactiveTwice && (!lockedTwice || !keyguard.isKeyguardSecure) ->
+            interactiveTwice && !lockedTwice ->
                 DeviceAvailability(true, AvailabilityBlocker.NONE, "The phone is awake and unlocked for scheduled work.")
             !interactiveTwice ->
                 DeviceAvailability(false, AvailabilityBlocker.SCREEN_OFF, "The phone screen turned off again before work could start.")

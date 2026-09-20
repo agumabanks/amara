@@ -41,12 +41,199 @@ class AutonomousWorkIntegrationTest {
         context.deleteDatabase("amara_learning.db")
     }
 
+    @Test fun currentChannelHoursUpdatePendingWorkWithoutReleasingHoldsOrCampaigns() {
+        WorkQueue(context).use { queue ->
+            val report = ManagerReportWork.from("+256700000001", "hours", "Report")!!
+            val held = report.copy(dedupeKey = "held-hours")
+            val broadcast = report.copy(dedupeKey = "campaign-hours", kind = WorkKind.WA_BROADCAST)
+            val story = report.copy(dedupeKey = "story-hours", domain = Domain.TIKTOK, kind = WorkKind.TIKTOK_STORY_PUBLISH)
+            listOf(report, held, broadcast, story).forEach(queue::offer)
+            queue.requireReview(held, "Uncertain")
+            val later = System.currentTimeMillis() + 120000
+            queue.deferPending(report.dedupeKey, later)
+            assertEquals(2, queue.refreshPendingChannelHours(true, true))
+            assertTrue(queue.allPending().first { it.dedupeKey == report.dedupeKey }.payload.optBoolean("owner_always_on"))
+            assertFalse(queue.allPending().first { it.kind == WorkKind.WA_BROADCAST }.payload.optBoolean("owner_always_on"))
+            val exported = queue.evaluationSnapshot()
+            assertTrue((0 until exported.length()).any { exported.getJSONObject(it).optLong("not_before") == later })
+            assertEquals(1, (queue.dashboard()["needsReview"] as List<*>).size)
+            assertEquals(2, queue.refreshPendingChannelHours(false, false))
+            assertTrue(queue.allPending().none { it.payload.optBoolean("owner_always_on") })
+            val command = report.copy(dedupeKey = "explicit-owner-hours", payload = org.json.JSONObject()
+                .put("owner_command", true).put("owner_always_on", true))
+            queue.offer(command)
+            assertEquals(0, queue.refreshPendingChannelHours(false, false))
+            assertTrue(queue.allPending().first { it.dedupeKey == command.dedupeKey }.payload.optBoolean("owner_always_on"))
+        }
+    }
+
+    @Test fun ownerReviewClosurePreservesHistoryAndCannotReplayWork() {
+        WorkQueue(context).use { queue ->
+            val item = ManagerReportWork.from("+256700000001", "review-close", "Payment question")!!
+            queue.offer(item)
+            assertFalse(queue.closeReview(item.dedupeKey, "handled_elsewhere"))
+            queue.requireReview(item, "Delivery uncertain")
+            assertFalse(queue.closeReview(item.dedupeKey, "retry"))
+            assertTrue(queue.closeReview(item.dedupeKey, "handled_elsewhere"))
+            assertFalse(queue.closeReview(item.dedupeKey, "handled_elsewhere"))
+            assertTrue((queue.dashboard()["needsReview"] as List<*>).isEmpty())
+            queue.expireStale(System.currentTimeMillis() + 7 * 86_400_000L)
+            assertEquals(WorkQueue.OfferResult.DEDUPED, queue.offer(item))
+            assertTrue(queue.allPending().isEmpty())
+            queue.readableDatabase.rawQuery("SELECT status,payload FROM work_items WHERE dedupe_key=?", arrayOf(item.dedupeKey)).use {
+                assertTrue(it.moveToFirst())
+                assertEquals("OWNER_CLOSED", it.getString(0))
+                val payload = org.json.JSONObject(it.getString(1))
+                assertEquals("Delivery uncertain", payload.getString("review_reason"))
+                assertEquals("handled_elsewhere", payload.getString("owner_disposition"))
+            }
+        }
+    }
+
+    @Test fun lateOlderNotificationCannotReplaceTheLatestQuestionOrReopenHandledWork() {
+        WorkQueue(context).use { queue ->
+            fun inbound(key: String, at: Long, identity: String = "origin-a") = WorkItem(
+                dedupeKey = key, domain = Domain.WHATSAPP, kind = WorkKind.WA_REPLY_INBOUND,
+                payload = org.json.JSONObject().put("inbound",true).put("conversation_identity", identity)
+                    .put("conversation","Customer").put("message","Question $at").put("inbound_message_at",at),
+                baseValueKes = 1.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 30,
+            )
+            val latest = inbound("new-question",200)
+            assertEquals(WorkQueue.OfferResult.ACCEPTED, queue.offer(latest))
+            assertEquals(WorkQueue.OfferResult.DEDUPED, queue.offer(inbound("late-old-question",100)))
+            assertEquals(latest.dedupeKey,queue.allPending().single().dedupeKey)
+            queue.complete(latest.dedupeKey)
+            assertEquals(WorkQueue.OfferResult.DEDUPED, queue.offer(inbound("late-old-question",100)))
+            assertEquals(WorkQueue.OfferResult.ACCEPTED, queue.offer(inbound("other-customer",100,"origin-b")))
+            assertEquals(WorkQueue.OfferResult.ACCEPTED, queue.offer(inbound("newer-question",300)))
+            val missed = inbound("missed-call",400).copy(payload = org.json.JSONObject(latest.payload.toString()).put("is_missed_call",true))
+            queue.offer(missed)
+            queue.compactPendingBacklog()
+            assertEquals(3,queue.allPending().size)
+        }
+    }
+
+    @Test fun managerReportsSurviveStartupCompaction() {
+        WorkQueue(context).use { queue ->
+            val report = ManagerReportWork.from("+256700000001", "health", "Some work is waiting")!!
+            queue.offer(report)
+            queue.compactPendingBacklog()
+            assertEquals(report.dedupeKey, queue.allPending().single().dedupeKey)
+        }
+    }
+
+    @Test fun dashboardSeparatesDueScheduledAndReviewWithExactWakeTime() {
+        WorkQueue(context).use { queue ->
+            val now = System.currentTimeMillis()
+            val report = ManagerReportWork.from("+256700000001", "due", "Due")!!
+            val later = ManagerReportWork.from("+256700000001", "later", "Later")!!
+            val review = ManagerReportWork.from("+256700000001", "review", "Uncertain")!!
+            listOf(report, later, review).forEach(queue::offer)
+            queue.deferPending(later.dedupeKey, now + 120000)
+            queue.requireReview(review, "Delivery uncertain")
+            val dashboard = queue.dashboard(now + 1)
+            assertEquals(1, dashboard["dueCount"])
+            assertEquals(1, dashboard["scheduledCount"])
+            assertEquals(now + 120000, dashboard["nextDueAt"])
+            assertEquals(1, (dashboard["needsReview"] as List<*>).size)
+            assertEquals(30000L, queue.nextWakeDelayMillis(now))
+            assertEquals(10L, queue.nextWakeDelayMillis(now + 119990))
+            val exported = queue.evaluationSnapshot()
+            assertTrue((0 until exported.length()).any { exported.getJSONObject(it).optLong("not_before") == now + 120000 })
+        }
+    }
+
+    @Test fun ownerWarningIsBoundedAndDoesNotClaimDelivery() {
+        val message = ManagerReportWork.blockerMessage(List(8) { "Blocker $it " + "x".repeat(300) })
+        assertTrue(message.length < 1600)
+        assertTrue(message.contains("Plus 4 other issues"))
+        assertTrue(message.contains("not confirmed deliveries"))
+        assertEquals(1, Regex("• Battery").findAll(ManagerReportWork.blockerMessage(listOf("Battery", "Battery"))).count())
+    }
+
     private fun snapshot(
         ownerActive: Boolean = false,
         network: Boolean = true,
         hour: Int = 12,
         quiet: Boolean = false,
     ) = WorldSnapshot(ownerActive, false, 80, ThermalState.NORMAL, network, hour, quiet, 0, 0, 0)
+
+    @Test fun blockedScreenHeadDoesNotStarveBackgroundWorkOrConsumeAnAttempt() {
+        WorkQueue(context).use { queue ->
+            val screen = WorkItem("blocked-publish", Domain.TIKTOK, WorkKind.TIKTOK_POST_PUBLISH,
+                baseValueKes = 200.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 120,
+                requires = setOf(Capability.SCREEN))
+            val background = screen.copy(dedupeKey = "background-health", domain = Domain.INTERNAL,
+                kind = WorkKind.INTERNAL_HEALTH_CHECK, requires = emptySet())
+            queue.offer(screen)
+            queue.offer(background)
+            val world = snapshot(quiet = true).copy(screenMinutesUsedToday = 90)
+            val deferred = mutableListOf<String>()
+            val grant = PhoneTimeBudgeter(context).selectEligible(queue, world) { item, _ -> deferred.add(item.dedupeKey) }
+            assertNotNull(grant)
+            assertEquals(listOf(screen.dedupeKey), deferred)
+            assertEquals(background.dedupeKey, queue.peekBest(System.currentTimeMillis())?.dedupeKey)
+            assertEquals(0, queue.allPending().single { it.dedupeKey == screen.dedupeKey }.attempt)
+            assertNull(PhoneTimeBudgeter(context).requestSession(world, screen))
+            assertNotNull(PhoneTimeBudgeter(context).requestSession(world, background))
+        }
+    }
+
+    @Test fun expiredLeaseDeniedAdmissionCannotBlockBackgroundOrBeRearmed() {
+        WorkQueue(context).use { queue ->
+            val screen = WorkItem("expired-lease", Domain.TIKTOK, WorkKind.TIKTOK_POST_PUBLISH,
+                baseValueKes = 100.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 60,
+                requires = setOf(Capability.SCREEN))
+            queue.offer(screen)
+            assertTrue(queue.markInFlight(screen.dedupeKey, -1_000))
+            queue.offer(screen.copy(dedupeKey = "health-after-lease", domain = Domain.INTERNAL,
+                kind = WorkKind.INTERNAL_HEALTH_CHECK, requires = emptySet()))
+            assertNotNull(PhoneTimeBudgeter(context).selectEligible(queue, snapshot(quiet = true)))
+            assertEquals(listOf("health-after-lease"), queue.allPending().map { it.dedupeKey })
+        }
+    }
+
+    @Test fun admissionScanIsBoundedAndBlockedWorkRemainsPending() {
+        WorkQueue(context).use { queue ->
+            repeat(60) { index ->
+                queue.offer(WorkItem("blocked-$index", Domain.entries[index % Domain.entries.size], WorkKind.WA_BROADCAST,
+                    baseValueKes = 100.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 60,
+                    requires = setOf(Capability.SCREEN)))
+            }
+            var deferred = 0
+            assertNull(PhoneTimeBudgeter(context).selectEligible(queue, snapshot(quiet = true)) { _, _ -> deferred++ })
+            assertEquals(50, deferred)
+            assertEquals(60, queue.allPending().size)
+            assertTrue(queue.allPending().all { it.attempt == 0 })
+        }
+    }
+
+    @Test fun pendingCooldownDoesNotRearmCompletedWorkOrCountAttempt() {
+        WorkQueue(context).use { queue ->
+            val item = WorkItem("cooldown", Domain.TIKTOK, WorkKind.TIKTOK_POST_PUBLISH,
+                baseValueKes=100.0, urgencyHalfLifeHours=1.0, estimatedScreenSeconds=60)
+            queue.offer(item)
+            assertTrue(queue.deferPending(item.dedupeKey, System.currentTimeMillis()+60_000))
+            assertNull(queue.peekBest(System.currentTimeMillis()))
+            assertEquals(0, queue.allPending().single().attempt)
+            queue.complete(item.dedupeKey)
+            assertFalse(queue.deferPending(item.dedupeKey, 0))
+            assertTrue(queue.allPending().isEmpty())
+        }
+    }
+
+    @Test fun replayOfCompletedNotificationCannotDeleteNewerCustomerWork() {
+        WorkQueue(context).use { queue ->
+            val old = WorkItem("old-notification", Domain.WHATSAPP, WorkKind.WA_REPLY_INBOUND,
+                payload = org.json.JSONObject().put("conversation_identity", "same-customer"),
+                baseValueKes = 100.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 30)
+            queue.offer(old)
+            queue.complete(old.dedupeKey)
+            queue.offer(old.copy(dedupeKey = "new-question"))
+            assertEquals(WorkQueue.OfferResult.DEDUPED, queue.offer(old))
+            assertEquals("new-question", queue.allPending().single().dedupeKey)
+        }
+    }
 
     @Test fun sameNameDistinctOriginsNeverSupersedeEachOther() {
         WorkQueue(context).use { queue ->
@@ -98,7 +285,9 @@ class AutonomousWorkIntegrationTest {
     @Test fun taskDeadlinesBoundQueueOccupancy() {
         assertEquals(90_000L, AmaraWorkLoop.itemTimeoutMs(WorkKind.WA_REPLY_INBOUND))
         assertEquals(120_000L, AmaraWorkLoop.itemTimeoutMs(WorkKind.JUMIA_CAPTURE))
-        assertTrue(WorkKind.entries.all { AmaraWorkLoop.itemTimeoutMs(it) in 1..240_000L })
+        assertEquals(480_000L, AmaraWorkLoop.itemTimeoutMs(WorkKind.TIKTOK_POST_PUBLISH))
+        assertEquals(600_000L, AmaraWorkLoop.itemTimeoutMs(WorkKind.YOUTUBE_SHORT_PUBLISH))
+        assertTrue(WorkKind.entries.all { AmaraWorkLoop.itemTimeoutMs(it) in 1..600_000L })
     }
 
     @Test fun groupWorkCatchesUpDuringDayAndUsesOnlyAllowedTargets() = runBlocking {
@@ -108,6 +297,7 @@ class AutonomousWorkIntegrationTest {
         val first = source.propose(snapshot(hour = 15)).single()
         assertEquals("Naalya E-Trade", first.payload.getString("group_target"))
         assertEquals(first.dedupeKey, source.propose(snapshot(hour = 19)).single().dedupeKey)
+        assertEquals(first.dedupeKey, source.propose(snapshot(hour = 21, quiet = false)).single().dedupeKey)
         assertTrue(source.propose(snapshot(quiet = true)).isEmpty())
         targets = emptyList()
         assertTrue(source.propose(snapshot()).isEmpty())
@@ -331,6 +521,18 @@ class AutonomousWorkIntegrationTest {
             foregroundPackage = "co.sanaa.agent"))
     }
 
+    @Test fun blockedPublicationDoesNotPreemptCommunityButReadyCustomerDoes() {
+        val queue = WorkQueue(context)
+        queue.offer(WorkItem("blocked-post", Domain.TIKTOK, WorkKind.TIKTOK_POST_PUBLISH,
+            baseValueKes = 100.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 90))
+        assertTrue(queue.hasReadyCustomerOrPost())
+        assertFalse(queue.hasReadyCustomerOrPost(kindAllowed = { it != WorkKind.TIKTOK_POST_PUBLISH }))
+        queue.offer(WorkItem("ready-customer", Domain.WHATSAPP, WorkKind.WA_REPLY_INBOUND,
+            baseValueKes = 100.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 30))
+        assertTrue(queue.hasReadyCustomerOrPost(kindAllowed = { it != WorkKind.TIKTOK_POST_PUBLISH }))
+        queue.close()
+    }
+
     @Test fun automationForegroundDoesNotMasqueradeAsOwnerButTouchStillWins() {
         assertFalse(OwnerPresenceMonitor.screenIndicatesOwnerActive(
             interactive = true, deviceLocked = false, foregroundPackage = "com.zhiliaoapp.musically",
@@ -349,8 +551,33 @@ class AutonomousWorkIntegrationTest {
         assertNotNull(budgeter.requestSession(snapshot(hour = 23, quiet = true), item))
         assertNull(budgeter.requestSession(snapshot(hour = 23, ownerActive = true), item))
         assertNull(budgeter.requestSession(snapshot(hour = 23).copy(batteryPercent = 15), item))
+        assertNotNull(budgeter.requestSession(snapshot(hour = 23).copy(batteryPercent = 16), item))
+        assertNotNull(budgeter.requestSession(snapshot(hour = 23).copy(batteryPercent = 19), item))
         assertNotNull(budgeter.requestSession(snapshot(hour = 23), item.copy(payload = org.json.JSONObject())))
         assertNull(budgeter.requestSession(snapshot(hour = 23, quiet = true), item.copy(payload = org.json.JSONObject())))
+    }
+
+    @Test fun inboundReplyGetsSmallReserveAfterNormalBudgetIsSpent() {
+        val budgeter = PhoneTimeBudgeter(context) { 10 }
+        val reply = WorkItem("reserve-reply", Domain.WHATSAPP, WorkKind.WA_REPLY_INBOUND,
+            baseValueKes = 100.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 60,
+            requires = setOf(Capability.SCREEN, Capability.CONSENT_TIER_2))
+        assertNotNull(budgeter.requestSession(snapshot().copy(screenMinutesUsedToday = 10), reply))
+        val broadcast = reply.copy(dedupeKey = "reserve-broadcast", kind = WorkKind.WA_BROADCAST)
+        assertNull(budgeter.requestSession(snapshot().copy(screenMinutesUsedToday = 10), broadcast))
+    }
+
+    @Test fun exhaustedScreenCounterDoesNotBlockInternalHealth() {
+        context.deleteDatabase("amara_safety.db")
+        SafetyGovernor(context).use { governor ->
+            val screen = WorkItem("used-budget", Domain.TIKTOK, WorkKind.TIKTOK_POST_PUBLISH,
+                baseValueKes = 1.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 60,
+                requires = setOf(Capability.SCREEN))
+            governor.recordExecution(WorkResult(screen, WorkStatus.DONE, screenSecondsUsed = 90 * 60))
+            assertFalse(governor.isAllowed(screen, 0, 0, snapshot()).allowed)
+            assertTrue(governor.isAllowed(screen.copy(kind = WorkKind.INTERNAL_HEALTH_CHECK,
+                requires = emptySet()), 0, 0, snapshot()).allowed)
+        }
     }
 
     @Test fun activeSessionStopsWhenPhoneBecomesHotOrLowOnBattery() {
@@ -366,9 +593,9 @@ class AutonomousWorkIntegrationTest {
             payload = org.json.JSONObject().put("owner_command", true),
         )
         assertFalse(AmaraWorkLoop.shouldStopForDeviceHealth(snapshot().copy(thermalState = ThermalState.HOT), directOwnerCommand))
-        assertTrue(AmaraWorkLoop.shouldStopForDeviceHealth(snapshot().copy(batteryPercent = 20)))
-        assertTrue(AmaraWorkLoop.shouldStopForDeviceHealth(snapshot().copy(batteryPercent = 20), ownerCanary))
-        assertFalse(AmaraWorkLoop.shouldStopForDeviceHealth(snapshot().copy(batteryPercent = 21)))
+        assertTrue(AmaraWorkLoop.shouldStopForDeviceHealth(snapshot().copy(batteryPercent = 15)))
+        assertTrue(AmaraWorkLoop.shouldStopForDeviceHealth(snapshot().copy(batteryPercent = 15), ownerCanary))
+        assertFalse(AmaraWorkLoop.shouldStopForDeviceHealth(snapshot().copy(batteryPercent = 16)))
     }
 
     @Test fun colorOsAggregateThermalNoiseDoesNotReplaceBatterySafety() {
@@ -553,5 +780,28 @@ class AutonomousWorkIntegrationTest {
         assertEquals(340_000, listing.priceUgx)
         assertEquals("Yosiah Ofumbi", listing.sellerName)
         assertTrue(listing.listingKey.startsWith("jiji:"))
+    }
+
+    @Test fun postingAllowanceSurvivesOtherWorkButHonorsHealthAndItsOwnLimit() {
+        context.deleteDatabase("amara_safety.db")
+        SafetyGovernor(context, maxDailyScreenMinutes = { 90 }, tikTokPostingMinutes = { 8 }).use { governor ->
+            val post = WorkItem("reserved-post", Domain.TIKTOK, WorkKind.TIKTOK_POST_PUBLISH,
+                baseValueKes=10.0, urgencyHalfLifeHours=1.0, estimatedScreenSeconds=120,
+                requires=setOf(Capability.SCREEN), payload=org.json.JSONObject().put("owner_always_on", true))
+            val other=post.copy(kind=WorkKind.SOKO_AUDIT)
+            governor.recordExecution(WorkResult(other, WorkStatus.DONE, screenSecondsUsed=5400))
+            val world=snapshot().copy(screenMinutesUsedToday=90)
+            val budgeter=PhoneTimeBudgeter(context, tikTokRemainingSeconds=governor::tikTokPostingSecondsRemaining)
+            assertNotNull(budgeter.requestSession(world,post))
+            assertNull(budgeter.requestSession(world,other))
+            assertTrue(governor.isAllowed(post,0,0,world).allowed)
+            assertFalse(governor.isAllowed(other,0,0,world).allowed)
+            assertNull(budgeter.requestSession(world.copy(batteryPercent=15),post))
+            assertNull(budgeter.requestSession(world.copy(thermalState=ThermalState.HOT),post))
+            governor.recordExecution(WorkResult(post,WorkStatus.FAILED,screenSecondsUsed=360))
+            assertEquals(120,governor.tikTokPostingSecondsRemaining())
+            assertNull(budgeter.requestSession(world,post))
+            assertFalse(governor.isAllowed(post,0,0,world).allowed)
+        }
     }
 }

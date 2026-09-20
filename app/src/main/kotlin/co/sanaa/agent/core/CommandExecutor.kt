@@ -23,6 +23,9 @@ data class CommandResult(
 /** Entry point used by Flutter and WorkManager. */
 class CommandExecutor(context: Context) {
     private val controller = AutonomyController(context)
+    internal suspend fun executeWithinDeviceLease(command: String): CommandResult =
+        controller.execute(command, "", "", deviceLeaseHeld = true)
+
     suspend fun execute(command: String, contactName: String, contactPhone: String): CommandResult =
         controller.execute(command, contactName, contactPhone)
 }

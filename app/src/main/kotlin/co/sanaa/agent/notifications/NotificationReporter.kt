@@ -21,12 +21,13 @@ class NotificationReporter(private val context: Context) {
         Priority.entries.forEach { manager.createNotificationChannel(NotificationChannel(it.channel, it.name.replace('_', ' '), it.importance)) }
     }
 
-    fun report(title: String, message: String, priority: Priority = Priority.INFO) {
+    fun report(title: String, message: String, priority: Priority = Priority.INFO,
+               notificationId: Int = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()) {
         val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(context, priority.channel)
             .setSmallIcon(R.drawable.ic_agent).setContentTitle(title).setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message)).setContentIntent(open).setAutoCancel(true)
             .setPriority(if (priority == Priority.INFO) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_HIGH).build()
-        context.getSystemService(NotificationManager::class.java).notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+        context.getSystemService(NotificationManager::class.java).notify(notificationId, notification)
     }
 }

@@ -19,6 +19,57 @@ import org.junit.Test
  * separately by AmaraMemoryTest (Robolectric).
  */
 class SideEffectTransactionTest {
+    @Test fun configuredManagerReportPassesSchemaAndActuallyDispatchesOnce() = runBlocking {
+        val ledger=FakeLedger()
+        val target="+256700123456"
+        val runner=SideEffectRunner(ledger).apply { businessScopeGuard={ _, inputs -> BusinessChannelPolicy.managerBlocker(target,inputs) } }
+        var sends=0
+        suspend fun send()=runner.execute(CapabilityIds.NOTIFY_OWNER_WHATSAPP,"manager-proof",target,"Order paid",
+            inputs=mapOf("target" to target,"content" to "Order paid","manager_report" to true),
+            act={sends++;true},verify={VerificationEvidence(true,1.0,"com.whatsapp","delivered",System.currentTimeMillis())})
+        assertTrue(send() is SideEffectOutcome.Verified)
+        assertTrue(send() is SideEffectOutcome.DuplicateBlocked)
+        assertEquals(1,sends)
+    }
+
+
+    @Test fun shopSwitchDuringPreparationCancelsBeforeDispatch() = runBlocking {
+        val ledger=FakeLedger()
+        var scope="shop-a"
+        val runner=SideEffectRunner(ledger).apply { businessScopeGuard={ _, inputs -> if(inputs["shop_scope"]==scope) null else "Shop changed" } }
+        val outcome=runner.execute("post_tiktok", "shop-change", "tiktok", "ad", initiator=Initiator.RECURRING_SCHEDULE, inputs=mapOf("shop_scope" to "shop-a", "target" to "tiktok", "message" to "ad"),
+            preflight={scope="shop-b";null}, act={error("Must not publish across shops")}, verify={error("No effect")})
+        assertTrue(outcome is SideEffectOutcome.Rejected)
+        assertEquals(SideEffectState.CANCELLED,ledger.find("shop-change")?.state)
+    }
+
+    @Test fun unscopedLegacyWorkCannotDispatch() = runBlocking {
+        val ledger=FakeLedger()
+        val runner=SideEffectRunner(ledger).apply { businessScopeGuard={ _, inputs -> if(inputs["shop_scope"]=="shop-a") null else "Unscoped old work" } }
+        val result=runner.execute("post_tiktok", "old", "tiktok", "ad", act={error("Must not publish")},verify={error("No effect")})
+        assertTrue(result is SideEffectOutcome.Rejected)
+        assertTrue(ledger.store.isEmpty())
+    }
+
+    @Test fun ownerOffRejectsWithoutClaimingOrDispatching() = runBlocking {
+        val ledger = FakeLedger()
+        val runner = SideEffectRunner(ledger).apply { ownerAllowsWork = { false } }
+        val result = runner.execute("send_whatsapp", "off", "A", "msg", initiator=Initiator.OWNER_CHAT,
+            act = { error("Must not send while off") }, verify = { error("No action to verify") })
+        assertTrue(result is SideEffectOutcome.Rejected)
+        assertTrue(ledger.store.isEmpty())
+    }
+
+    @Test fun ownerOffDuringPreflightCancelsBeforeSend() = runBlocking {
+        val ledger = FakeLedger()
+        var on = true
+        val runner = SideEffectRunner(ledger).apply { ownerAllowsWork = { on } }
+        val result = runner.execute("send_whatsapp", "off-preflight", "A", "msg", initiator=Initiator.OWNER_CHAT,
+            preflight = { on = false; null },
+            act = { error("Must not send after owner turns off") }, verify = { error("No send") })
+        assertTrue(result is SideEffectOutcome.Rejected)
+        assertEquals(SideEffectState.CANCELLED, ledger.find("off-preflight")?.state)
+    }
 
     @Test fun missingBubbleAndPendingTickNeverProveNoEffectOrDelivery() {
         val base=SendObservation("com.whatsapp","com.whatsapp",true,false,false,null,1L)

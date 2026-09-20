@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only five-hour collector. Private metadata only; never drives app UI or sends messages."""
+"""Read-only bounded evaluation collector (supports a seven-day journal). Private metadata only; never drives app UI or sends messages."""
 import argparse, collections, datetime, json, math, os, pathlib, subprocess, time
 
 
@@ -40,6 +40,8 @@ def summarize(events, end_ms, now_ms):
       'reporting_failures':sum(r.get('event')=='reporting_failure' for r in events),
       'capacity_rejections':sum(r.get('event')=='rejected_capacity' for r in events),
       'last_phone_event_at':max([r.get('at',0) for r in events],default=0),'phone_journal_stale':not events or now_ms-max(r.get('at',0) for r in events)>180000,
+      'build_segments':dict(collections.Counter(r.get('build_segment','unknown') for r in events)),
+      'largest_phone_event_gap_seconds':max([max(0,b-a)/1000 for a,b in zip(sorted(r.get('at',0) for r in events),sorted(r.get('at',0) for r in events)[1:])],default=None),
       'health_samples':len(health),'commercial_baseline':commercial_start,'commercial_latest':commercial_end,
       'limits':['No traffic means insufficient evidence, not a pass.','Work completion is distinct from verified external delivery.','Phone outages and collector gaps are reported separately.','Commercial totals may cover calendar periods; do not attribute their change to Amara without ledger evidence.','Superseded messages are retained as dispositions; the replacement still requires verification.']}
 
@@ -84,6 +86,7 @@ def main():
         result=summarize(rows,args.end_ms,int(time.time()*1000));result['malformed_event_lines']=bad
         polls=[json.loads(l) for l in (out/'collector-health.jsonl').read_text().splitlines()]
         result['collector_polls']=len(polls);result['failed_journal_polls']=sum(p['journal_fetch_exit']!=0 for p in polls)
+        result['largest_collector_gap_seconds']=max([max(0,b['at']-a['at'])/1000 for a,b in zip(polls,polls[1:])],default=None)
         result['process_absent_polls']=sum(not p['process_present'] for p in polls)
         temp=out/'summary.tmp';temp.write_text(json.dumps(result,indent=2)+'\n');temp.replace(out/'summary.json')
         if int(time.time()*1000)>=args.end_ms:break

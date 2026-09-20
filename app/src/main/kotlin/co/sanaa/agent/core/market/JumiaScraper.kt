@@ -23,7 +23,7 @@ class JumiaScraper(
 ) {
     data class CaptureResult(val products: Int, val screenshotPath: String, val surface: String, val pagesBrowsed: Int = 0, val sectionsVisited: Int = 0)
 
-    fun isInstalled(): Boolean = actions.packageNameForApp("jumia") != null
+    fun isInstalled(): Boolean = actions.isAppInstalled("jumia")
 
     suspend fun captureFeaturedOffers(): CaptureResult {
         if (!isInstalled() || !actions.openAppByName("jumia")) return CaptureResult(0, "", "unavailable")
@@ -146,6 +146,8 @@ class JumiaScraper(
             )
         }
         cursor.close()
+        database.execSQL("INSERT INTO price_history(listing_key,price_ugx,recorded_at) SELECT ?,?,? WHERE NOT EXISTS(SELECT 1 FROM price_history WHERE listing_key=? AND recorded_at>=?)",
+            arrayOf(key,price,now,key,now-24*3_600_000L))
     }
 
     companion object {

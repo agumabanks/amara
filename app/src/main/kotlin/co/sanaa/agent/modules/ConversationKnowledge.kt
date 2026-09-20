@@ -26,7 +26,7 @@ class ConversationKnowledge(context: Context) : SQLiteOpenHelper(context, "amara
         arrayOf(chatKey, (System.currentTimeMillis() - 90L * 86400000).toString())
     ).use { c -> buildList { while (c.moveToNext()) add("${c.getString(0)}: ${c.getString(1)}") }.joinToString("\n") }
     companion object {
-        private val kinds = setOf("product_interest", "delivery_area", "language", "contact_preference", "size_colour", "budget")
+        private val kinds = setOf("product_interest", "service_interest", "delivery_area", "language", "contact_preference", "size_colour", "budget")
         fun validEvidence(kind: String, evidence: String, message: String): Boolean =
             kind in kinds && evidence.length in 3..180 && message.contains(evidence) &&
                 !Regex("(?i)\\b(pin|password|passcode|otp|secret|token|api.?key)\\b").containsMatchIn(evidence) &&

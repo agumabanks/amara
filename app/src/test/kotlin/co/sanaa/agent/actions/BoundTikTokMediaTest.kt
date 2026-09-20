@@ -11,6 +11,21 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class BoundTikTokMediaTest {
+    @Test fun boundVideoCanBeSharedThroughManifestProvider() {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        // Each Robolectric test has a new filesDir; attach the manifest provider
+        // to this context so AndroidX drops any prior sandbox's cached roots.
+        androidx.core.content.FileProvider().attachInfo(context,
+            context.packageManager.resolveContentProvider("${context.packageName}.files",
+                android.content.pm.PackageManager.GET_META_DATA)!!)
+        val directory = java.io.File(context.filesDir, "tiktok-bound-video")
+        val video = BoundTikTokMedia.prepare(directory, "video-share", extension = "mp4") { byteArrayOf(1, 2, 3) }
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", video)
+        assertEquals("content", uri.scheme)
+        assertTrue(uri.path.orEmpty().startsWith("/bound_tiktok_video/"))
+        assertArrayEquals(video.readBytes(), context.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
+    }
+
     @get:Rule val temp = TemporaryFolder()
 
     @Test fun retriesUseFrozenBytesAndNewJobsMayFetchChangedMedia() {

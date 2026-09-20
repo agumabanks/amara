@@ -23,7 +23,144 @@ class ProofOfConceptReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         // Shell-only calibration hook. Compile-isolated from release builds so no POC
         // path can bypass the universal side-effect boundary in production.
+        // Read-only export remains available to ADB shell (receiver requires DUMP).
+        if (intent.action == "co.sanaa.agent.action.EXPORT_OBSERVATION") {
+            val pending = goAsync()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val runtime = AgentRuntime.get(context).awaitReady()
+                    runtime.evaluation.record("queue_inspection", fields = org.json.JSONObject()
+                        .put("queue", runtime.workQueue.evaluationSnapshot())
+                        .put("loop", org.json.JSONObject(runtime.workLoop.diagnostics())))
+                    runtime.evaluation.record("tiktok_sound_surface", fields = runtime.actions.tikTokSoundDiagnostics())
+                    co.sanaa.agent.core.shorts.ShortsQueue(context).use { queue ->
+                        val sources = org.json.JSONArray()
+                        runtime.memory.allSideEffectTransactions().filter {
+                            it.capability == co.sanaa.agent.core.CapabilityIds.POST_TIKTOK
+                        }.takeLast(30).forEach { receipt ->
+                            sources.put(org.json.JSONObject()
+                                .put("source", co.sanaa.agent.core.ContentHashing.hash(receipt.idempotencyKey))
+                                .put("state", receipt.state.name)
+                                .put("retained", queue.sourcePayload(receipt.idempotencyKey) != null))
+                        }
+                        runtime.evaluation.record("shorts_source_diagnostics", fields = org.json.JSONObject()
+                            .put("sources", sources).put("queue", queue.summary())
+                            .put("next_source", queue.next()?.first?.let { co.sanaa.agent.core.ContentHashing.hash(it) }))
+                    }
+                    val file = runtime.evaluation.exportObservation()
+                    Log.i(TAG, "Observation export=${file?.absolutePath ?: "unavailable"}")
+                } finally { pending.finish() }
+            }
+            return
+        }
         if (!co.sanaa.agent.BuildConfig.DEBUG) return
+        if(intent.action == "co.sanaa.agent.action.TEST_SOCIAL_SURFACE_READ") {
+            val pending=goAsync()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val runtime=AgentRuntime.get(context).awaitReady()
+                    val surface=co.sanaa.agent.actions.TikTokSocialSurface(runtime.actions)
+                    val profile=surface.profile()
+                    val home=if(profile!=null) surface.home() else false
+                    val post=if(home) surface.readPost() else null
+                    Log.i(TAG,"Social surface read: profile=${profile?.optString("handle")} home=$home postReadable=${post!=null}")
+                    runtime.evaluation.record("social_surface_read",fields=org.json.JSONObject().put("profile_readable",profile!=null).put("post_readable",post!=null))
+                } finally { pending.finish() }
+            }
+            return
+        }
+        if(intent.action == "co.sanaa.agent.action.TEST_GROUP_REPAIR_READ") {
+            val target=intent.getStringExtra("target").orEmpty()
+            if(target.isBlank()) return
+            val pending=goAsync()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val runtime=AgentRuntime.get(context).awaitReady()
+                    val entry=runtime.contacts.listAll().singleOrNull { it.isGroup && it.displayName==target } ?: return@launch
+                    val reason=runtime.groupSettings.row(entry)["lastReason"].toString()
+                    val beforeDispatch=reason.contains("no matching recipient",true) || reason.contains("single exact recipient",true)
+                    val uncertain=reason.contains("Uncertain",true)
+                    val actions=AccessibilityActions(context)
+                    val found=actions.openWhatsAppTarget(target)
+                    var delivered=false
+                    if(found && uncertain) {
+                        val payload=runtime.workQueue.readableDatabase.rawQuery("SELECT payload FROM work_items WHERE kind='WA_BROADCAST' ORDER BY id DESC",null).use { rows ->
+                            var match:org.json.JSONObject?=null
+                            while(rows.moveToNext()) {
+                                val candidate=org.json.JSONObject(rows.getString(0))
+                                if(candidate.optString("group_target")==target && candidate.optString("message").isNotBlank()) { match=candidate;break }
+                            }
+                            match
+                        }
+                        if(payload!=null) delivered=actions.verifyCaptionedPhoto(target,payload.optString("message")).verified
+                    }
+                    if(found && (beforeDispatch || delivered)) {
+                        runtime.groupSettings.update(runtime.contacts,entry.id,"resume",true)
+                        runtime.evaluation.record("owner_group_read_recovery",entry.id,org.json.JSONObject().put("delivery_confirmed",delivered).put("pre_dispatch_failure",beforeDispatch))
+                    }
+                    Log.i(TAG,"Group read recovery: found=$found deliveryConfirmed=$delivered resumed=${found && (beforeDispatch || delivered)}")
+                } finally { pending.finish() }
+            }
+            return
+        }
+        if(intent.action == "co.sanaa.agent.action.TEST_ENABLE_TIKTOK_STORIES") {
+            val pending=goAsync()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val runtime=AgentRuntime.get(context).awaitReady()
+                    runtime.config.tikTokStoriesEnabled=true
+                    runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("owner_stories_enabled",""))
+                    Log.i(TAG,"TikTok Stories enabled for subsequent verified feed ads")
+                } finally { pending.finish() }
+            }
+            return
+        }
+        if (intent.action == "co.sanaa.agent.action.TEST_TIKTOK_IMPORT_REPAIR") {
+            val pending = goAsync()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val runtime = AgentRuntime.get(context).awaitReady()
+                    val updated = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+                    val key = "owner-tiktok-import-repair:$updated"
+                    val queue = runtime.workQueue.readableDatabase
+                    val repairState = ModuleStateStore(context)
+                    val alreadyRun = repairState.string(key) == "released" || queue.rawQuery("SELECT 1 FROM work_items WHERE dedupe_key=?", arrayOf(key)).use { it.moveToFirst() }
+                    val importFailedBeforeUpdate = runtime.learningDb.readableDatabase.rawQuery(
+                        "SELECT started_at,success,error FROM action_log WHERE action_type='TIKTOK_POST_PUBLISH' ORDER BY id DESC LIMIT 1", null
+                    ).use { it.moveToFirst() && it.getLong(0) < updated && it.getInt(1) == 0 &&
+                        it.getString(2).orEmpty().contains("external trigger was never dispatched") &&
+                        it.getString(2).orEmpty().contains("preparation=composer_timeout") }
+                    if (alreadyRun || !importFailedBeforeUpdate) {
+                        Log.w(TAG, "Import repair retry refused: already released or no pre-dispatch import failure"); return@launch
+                    }
+                    val existing = runtime.workQueue.allPending().firstOrNull {
+                        it.kind == co.sanaa.agent.core.work.WorkKind.TIKTOK_POST_PUBLISH
+                    }
+                    val payload = queue.rawQuery("SELECT payload FROM work_items WHERE kind='TIKTOK_POST_PUBLISH' ORDER BY id DESC LIMIT 1", null).use {
+                        if (it.moveToFirst()) org.json.JSONObject(it.getString(0)) else null
+                    } ?: return@launch
+                    // A fresh transaction revalidates the same catalogue facts and media.
+                    // Keep all historical outcomes and failure counters intact.
+                    val item = co.sanaa.agent.core.work.WorkItem(
+                        dedupeKey = key, domain = co.sanaa.agent.core.work.Domain.TIKTOK,
+                        kind = co.sanaa.agent.core.work.WorkKind.TIKTOK_POST_PUBLISH,
+                        payload = payload.put("owner_canary", true), baseValueKes = 10_000.0,
+                        urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 120,
+                        requires = setOf(co.sanaa.agent.core.work.Capability.SCREEN, co.sanaa.agent.core.work.Capability.NETWORK,
+                            co.sanaa.agent.core.work.Capability.GROQ, co.sanaa.agent.core.work.Capability.CONSENT_TIER_2),
+                        riskTier = co.sanaa.agent.core.work.RiskTier.MEDIUM)
+                    if (existing == null) runtime.workQueue.offer(item)
+                    runtime.safetyGovernor.writableDatabase.execSQL(
+                        "UPDATE kind_breakers SET cooldown_until=0 WHERE kind='TIKTOK_POST_PUBLISH' AND last_trip_at<?", arrayOf(updated))
+                    repairState.putString(key, "released")
+                    runtime.evaluation.record("owner_import_repair_retry", key,
+                        org.json.JSONObject().put("build_updated_at", updated).put("listing_id", payload.optString("listing_id")))
+                    runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("owner_import_repair", key))
+                    Log.i(TAG, "Import repair retry released: ${existing?.dedupeKey ?: key}")
+                } finally { pending.finish() }
+            }
+            return
+        }
         if(intent.action=="co.sanaa.agent.action.TEST_WHATSAPP_REVIEW_RESTORE") {
             val key=intent.getStringExtra("work_key").orEmpty()
             if(!key.startsWith("wa-inbound:")) return
@@ -52,7 +189,7 @@ class ProofOfConceptReceiver : BroadcastReceiver() {
             return
         }
         if (intent.action == "co.sanaa.agent.action.TEST_EVALUATION_START") {
-            val window = co.sanaa.agent.core.EvaluationJournal(context).start()
+            val window = co.sanaa.agent.core.EvaluationJournal(context).start(intent.getLongExtra("duration_ms", 5 * 3_600_000L))
             Log.i(TAG, "Evaluation window=$window")
             return
         }
@@ -166,6 +303,21 @@ class ProofOfConceptReceiver : BroadcastReceiver() {
                 try {
                     val evidence = co.sanaa.agent.actions.TargetBoundVerifiers(AccessibilityActions(context)).verifyTikTokPost(caption)
                     Log.i(TAG, "Read-only TikTok verification=$evidence")
+                    if(evidence.verified && intent.getBooleanExtra("queue_story",false)) {
+                        val runtime=AgentRuntime.get(context).awaitReady()
+                        if(runtime.config.tikTokStoriesEnabled) runtime.workQueue.readableDatabase.rawQuery(
+                            "SELECT dedupe_key,payload FROM work_items WHERE kind='TIKTOK_POST_PUBLISH' ORDER BY id DESC LIMIT 30",null
+                        ).use { rows ->
+                            while(rows.moveToNext()) {
+                                val payload=org.json.JSONObject(rows.getString(1))
+                                if(payload.optString("caption")==caption) {
+                                    co.sanaa.agent.core.work.TikTokStoryWork.from(rows.getString(0),payload)?.let { runtime.workQueue.offer(it) }
+                                    Log.i(TAG,"Story queued from exact read-verified feed caption")
+                                    break
+                                }
+                            }
+                        }
+                    }
                 } finally { pending.finish() }
             }
             return
@@ -285,6 +437,24 @@ class ProofOfConceptReceiver : BroadcastReceiver() {
             return
         }
         if (intent.action == ACTION_TIKTOK_PREPARE) {
+            val savedMedia=intent.getStringExtra("saved_media").orEmpty()
+            if(savedMedia.matches(Regex("[a-f0-9]{64}\\.(mp4|jpg)"))) {
+                val file=java.io.File(context.filesDir,"amara-creative-library/$savedMedia")
+                if(!file.isFile) return
+                val shared=co.sanaa.agent.actions.BoundTikTokMedia.prepare(java.io.File(context.filesDir,
+                    if(file.extension=="mp4") "tiktok-bound-video" else "tiktok-bound-media"),
+                    "inspection:$savedMedia",extension=file.extension,maxBytes=40*1024*1024) { file.readBytes() }
+                val uri=androidx.core.content.FileProvider.getUriForFile(context,"${context.packageName}.files",shared)
+                context.grantUriPermission("com.zhiliaoapp.musically",uri,Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                context.startActivity(Intent(Intent.ACTION_SEND).apply {
+                    type=if(file.extension=="mp4") "video/mp4" else "image/jpeg"
+                    putExtra(Intent.EXTRA_STREAM,uri)
+                    clipData=android.content.ClipData.newRawUri("Ad",uri)
+                    setPackage("com.zhiliaoapp.musically")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                })
+                return
+            }
             val pending = goAsync()
             CoroutineScope(Dispatchers.IO).launch {
                 val runtime = AgentRuntime.get(context).awaitReady()
@@ -296,8 +466,21 @@ class ProofOfConceptReceiver : BroadcastReceiver() {
                 if (candidate == null) {
                     Log.w(TAG, "TikTok canary preparation failed: no active Soko listing with media")
                 } else {
-                    val caption = runtime.tiktok.generateCaption(candidate.title, candidate.description)
-                        .ifBlank { co.sanaa.agent.modules.TikTokSkill.fallbackCaption(candidate.title) }
+                    val content = co.sanaa.agent.modules.TikTokProductContent.from(candidate, runtime.config.publicAdWhatsApp, runtime.config.businessName)
+                    if (content == null) { Log.w(TAG, "Ad preview refused: missing catalogue facts"); pending.finish(); return@launch }
+                    val caption = content.caption
+                    val previewAd=if(intent.getBooleanExtra("static_preview",false)) content.ad.copy(format="photo") else content.ad
+                    val previewFile=runtime.actions.prepareBoundTikTokAd(content.imageUrl, "owner-ad-preview:${content.fingerprint}:${previewAd.format}:${intent.getStringExtra("preview_id").orEmpty()}", previewAd)
+                    if(intent.getBooleanExtra("open_editor",false)) {
+                        val uri=androidx.core.content.FileProvider.getUriForFile(context,"${context.packageName}.files",previewFile)
+                        context.startActivity(Intent(Intent.ACTION_SEND).apply {
+                            type=if(previewFile.extension=="mp4") "video/mp4" else "image/jpeg"
+                            putExtra(Intent.EXTRA_STREAM,uri)
+                            setPackage("com.zhiliaoapp.musically")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        })
+                    }
+                    Log.i(TAG, "Ad preview ready: headline=${content.ad.headline}; price=${content.ad.price}; WhatsApp configured=${content.ad.whatsapp != null}")
                     run {
                         ModuleStateStore(context).apply {
                             putString(TIKTOK_LISTING_ID, candidate.id)

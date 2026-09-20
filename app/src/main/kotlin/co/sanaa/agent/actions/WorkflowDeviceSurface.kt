@@ -19,6 +19,7 @@ interface WorkflowDeviceSurface {
     /** Approved Soko listing edit support (open form, save, reopen-compare). */
     suspend fun openSokoEditForm(productName: String): Boolean
     suspend fun setFirstEditableField(value: String): Boolean
+    suspend fun setSokoEditField(field: String, value: String): Boolean = false
     suspend fun saveSokoEditForm(): Boolean
     fun verifyEditFormFields(expected: Map<String, String>): Boolean
 }

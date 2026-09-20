@@ -12,7 +12,8 @@ object InboundWorkProposer {
         runtime.evaluation.record("inbound_observed", "wa-inbound:${ContentHashing.hash(inbound.signature)}",
             JSONObject().put("observed_at", observedAt).put("is_group", inbound.isGroup)
                 .put("automation_enabled", runtime.config.whatsAppAutomationEnabled && runtime.config.whatsAppInboundEnabled))
-        if (!runtime.config.whatsAppAutomationEnabled || !runtime.config.whatsAppInboundEnabled) return
+        // Discover group identities even while replies are off, so the owner can
+        // find and configure them. Listening does not imply permission to reply.
         if(inbound.isGroup && inbound.conversationIdentity.isNotBlank()) {
             val directory=co.sanaa.agent.core.ContactDirectoryProvider.instance
             var entry=directory?.byId(inbound.conversationIdentity)
@@ -24,15 +25,16 @@ object InboundWorkProposer {
             if(entry==null || !runtime.groupSettings.allows(entry,"listen")) return
             if(runtime.groupSettings.observe(entry.id,inbound.signature,observedAt))
                 runtime.chatStore.storeMessage(entry.id,inbound.sender,"received",inbound.message)
-            if(!runtime.groupSettings.allows(entry,"reply")) return
+            if(!runtime.groupSettings.allows(entry,"reply") || !runtime.groupSettings.acceptsReply(entry,inbound.message)) return
         }
+        if (!runtime.config.whatsAppAutomationEnabled || !runtime.config.whatsAppInboundEnabled) return
         if (inbound.isGroup && !runtime.config.whatsAppGroupsEnabled) return
         // WhatsApp's own transport/status notifications are not customer messages,
         // and an unresolved target must never become an autonomous send target.
         if (inbound.target.isBlank() || inbound.target.equals("WhatsApp", true) ||
             inbound.target.equals("Unknown", true) || inbound.message.startsWith("Sending ", true) ||
             (!inbound.isMissedCall && WhatsAppNotificationParser.isNonConversationalEvent(inbound.message))) return
-        runtime.workQueue.offer(
+        val offered=runtime.workQueue.offer(
             WorkItem(
                 dedupeKey = "wa-inbound:${ContentHashing.hash(inbound.signature)}",
                 domain = Domain.WHATSAPP,
@@ -40,6 +42,7 @@ object InboundWorkProposer {
                 payload = JSONObject()
                     .put("inbound", true)
                     .put("sender", inbound.sender)
+                    .put("manager_command_candidate", !inbound.isGroup && runtime.actions.isManagerCandidate(runtime.config.managerWhatsApp,inbound.sender,inbound.senderPhone))
                     .put("message", inbound.message)
                     .put("conversation", inbound.conversation)
                     .put("conversation_identity", inbound.conversationIdentity)
@@ -47,6 +50,7 @@ object InboundWorkProposer {
                     .put("is_missed_call", inbound.isMissedCall)
                     .put("trusted_whatsapp_notification", true)
                     .put("inbound_observed_at", observedAt)
+                    .put("inbound_message_at", inbound.messageTimestamp)
                     .put("owner_takeover_at", observedAt + 5_000L)
                     .put("owner_always_on", runtime.config.whatsAppAlwaysOn),
                 baseValueKes = WorkScorer.defaultBaseValue(WorkKind.WA_REPLY_INBOUND),
@@ -56,6 +60,13 @@ object InboundWorkProposer {
                 riskTier = WorkScorer.defaultRiskTier(WorkKind.WA_REPLY_INBOUND),
             ),
         )
+        if(offered==WorkQueue.OfferResult.REJECTED_CAP) {
+            runtime.evaluation.record("inbound_queue_rejected", "wa-inbound:${ContentHashing.hash(inbound.signature)}",
+                JSONObject().put("reason", "queue_capacity").put("observed_at", observedAt))
+            runtime.workBlockers.flag("inbound:queue_capacity", "WhatsApp auto-reply",
+                "The work queue is full; a received message has no scheduled reply.", ownerAction=true,
+                action="Review unanswered chats and queued work. Free queue space does not confirm those messages were answered.")
+        }
         runtime.workLoop.wake(WakeReason.WhatsAppNotification(inbound.sender, inbound.message))
     }
 }

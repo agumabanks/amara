@@ -141,6 +141,8 @@ sealed class SideEffectOutcome {
  * unknown capabilities and illegal transitions are rejected outright.
  */
 class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: () -> Long = System::currentTimeMillis) {
+    var ownerAllowsWork: () -> Boolean = { ledger.ownerAllowsWork() }
+    var businessScopeGuard: (String, Map<String, Any?>) -> String? = { _, _ -> null }
     var evaluationObserver: ((String, String, String) -> Unit)? = null
     private fun observed(state: String, capability: String, key: String) {
         try { evaluationObserver?.invoke(state, capability, key) } catch (_: Exception) { /* telemetry cannot affect dispatch */ }
@@ -167,6 +169,8 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
         act: suspend () -> Boolean,
         verify: suspend () -> VerificationEvidence,
     ): SideEffectOutcome {
+        if (!ownerAllowsWork()) return SideEffectOutcome.Rejected("Amara is off by owner request")
+        businessScopeGuard(capabilityId, inputs)?.let { return SideEffectOutcome.Rejected(it) }
         // ---- Resolve + validate against the authoritative catalog ----
         val spec = CapabilityCatalog.get(capabilityId)
             ?: return SideEffectOutcome.Rejected("Capability '$capabilityId' is not registered; refusing to execute an unknown external action.")
@@ -205,7 +209,7 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
         }
         // Typed schema validation at the boundary (Phase A gap fix).
         val effectiveInputs = if (inputs.isEmpty()) autoDeriveInputs(spec, target, content) else inputs
-        val schemaFailures = spec.parsedInputSchema.validate(effectiveInputs)
+        val schemaFailures = spec.parsedInputSchema.validate(effectiveInputs - "shop_scope")
         if (schemaFailures.isNotEmpty()) {
             return SideEffectOutcome.Rejected("Inputs rejected by the '$capabilityId' schema: ${schemaFailures.joinToString("; ")}")
         }
@@ -247,12 +251,24 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
             // rejected preflight proves nothing was dispatched, so an otherwise-valid
             // approval survives for the corrected attempt (policy may override by
             // consuming inside the preflight itself when it wants one-shot semantics).
+            if (!ownerAllowsWork()) {
+                ledger.transition(idempotencyKey, SideEffectState.CANCELLED, "Amara is off by owner request")
+                return SideEffectOutcome.Rejected("Amara is off by owner request")
+            }
             preflight?.let { check ->
                 val blocker = check()
                 if (blocker != null) {
                     ledger.transition(idempotencyKey, SideEffectState.CANCELLED, Redactor.redact(blocker))
                     return SideEffectOutcome.Failed(blocker)
                 }
+            }
+            if (!ownerAllowsWork()) {
+                ledger.transition(idempotencyKey, SideEffectState.CANCELLED, "Owner turned Amara off during preflight")
+                return SideEffectOutcome.Rejected("Amara is off by owner request")
+            }
+            businessScopeGuard(capabilityId, inputs)?.let { blocker ->
+                ledger.transition(idempotencyKey, SideEffectState.CANCELLED, Redactor.redact(blocker))
+                return SideEffectOutcome.Rejected(blocker)
             }
             // FINAL PRE-ACT BOUNDARY: the approval is validated AND consumed atomically
             // here — the last moment before any external dispatch. Expiry, revocation,
@@ -357,6 +373,7 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
  * Implementations must enforce legal transitions and stay crash-safe under concurrency.
  */
 interface SideEffectLedger {
+    fun ownerAllowsWork(): Boolean = true
     fun find(idempotencyKey: String): SideEffectTransaction?
     fun upsert(transaction: SideEffectTransaction): Boolean
     fun transition(idempotencyKey: String, newState: SideEffectState, evidence: String): Boolean
@@ -366,6 +383,7 @@ interface SideEffectLedger {
 
     companion object {
         fun from(memory: AmaraMemory): SideEffectLedger = object : SideEffectLedger {
+            override fun ownerAllowsWork(): Boolean = memory.ownerAllowsWork()
             override fun find(idempotencyKey: String): SideEffectTransaction? = memory.findSideEffectTransaction(idempotencyKey)
             override fun upsert(transaction: SideEffectTransaction): Boolean = memory.upsertSideEffectTransaction(transaction)
             override fun transition(idempotencyKey: String, newState: SideEffectState, evidence: String): Boolean =

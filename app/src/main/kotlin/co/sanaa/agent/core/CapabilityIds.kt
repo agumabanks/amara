@@ -60,6 +60,8 @@ object CapabilityIds {
 
     // TikTok
     const val TIKTOK_PUBLIC_COMMENT = "tiktok_public_comment"
+    const val POST_TIKTOK_STORY = "post_tiktok_story"
+    const val POST_YOUTUBE_SHORT = "post_youtube_short"
     const val POST_TIKTOK = "post_tiktok"
     const val TIKTOK_ANALYTICS = "tiktok_analytics"
     const val TIKTOK_COMMENTS = "tiktok_comments"

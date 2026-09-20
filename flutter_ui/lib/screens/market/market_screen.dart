@@ -1,6 +1,9 @@
+import 'insight_sheet.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '../doctor/doctor_screen.dart';
 import '../../bridge/agent_channel.dart';
 
 class MarketScreen extends StatefulWidget {
@@ -13,6 +16,10 @@ class _MarketScreenState extends State<MarketScreen>
     with WidgetsBindingObserver {
   Map<String, dynamic> _data = const {};
   bool _loading = true;
+  String? _error;
+  String? _researchResult;
+  bool _requesting = false;
+  String _query = "";
   bool _refreshing = false;
   Timer? _refreshTimer;
   @override
@@ -51,11 +58,17 @@ class _MarketScreenState extends State<MarketScreen>
       if (mounted) {
         setState(() {
           _data = value;
+          _error = null;
           _loading = false;
         });
       }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = "Market data could not refresh. Pull down to retry.";
+        });
+      }
     } finally {
       _refreshing = false;
     }
@@ -86,8 +99,14 @@ class _MarketScreenState extends State<MarketScreen>
           : RefreshIndicator(
               onRefresh: _refresh,
               child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.fromLTRB(18, 4, 18, 40),
                 children: [
+                  if (_error != null) _empty(_error!),
+                  if ((_data['catalogueBlocker']?.toString() ?? '').isNotEmpty)
+                    _empty(
+                      'Shop comparison unavailable: ${_data['catalogueBlocker']}',
+                    ),
                   Container(
                     padding: const EdgeInsets.all(20),
                     decoration: _box(accent: true),
@@ -104,60 +123,111 @@ class _MarketScreenState extends State<MarketScreen>
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          '$total verified observations',
+                          '$total saved observations',
                           style: const TextStyle(
                             fontSize: 27,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
-                        const Text(
-                          'Jiji + Jumia evidence compared with your Soko catalogue',
+                        Text(
+                          _data['researchScope']?.toString() ??
+                              'Jiji and Jumia market evidence',
                           style: TextStyle(color: Colors.white54),
                         ),
                         const SizedBox(height: 14),
+                        TextField(
+                          maxLength: 120,
+                          onChanged: (value) => _query = value,
+                          decoration: const InputDecoration(
+                            labelText: 'Research a product on Jiji',
+                            hintText: 'e.g. receipt printer',
+                            helperText:
+                                'Leave blank for Printers & Scanners. Jumia checks featured offers.',
+                          ),
+                        ),
                         FilledButton.icon(
-                          onPressed: () async {
-                            await AgentChannel.wakeAutonomousLoop();
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Amara has been woken to check scheduled research when the phone is available.',
-                                ),
-                              ),
-                            );
-                          },
+                          onPressed: _requesting
+                              ? null
+                              : () async {
+                                  setState(() => _requesting = true);
+                                  try {
+                                    final result =
+                                        await const MethodChannel(
+                                          'com.sanaa.agent/core',
+                                        ).invokeMapMethod<String, dynamic>(
+                                          'requestMarketResearch',
+                                          {'query': _query.trim()},
+                                        ) ??
+                                        {};
+                                    if (!mounted) return;
+                                    setState(
+                                      () => _researchResult = [
+                                        if ((result['queued'] as List? ?? [])
+                                            .isNotEmpty)
+                                          'Queued: ${(result['queued'] as List).join(', ')}. Runs when phone time is available.',
+                                        ...(result['blockers'] as List? ?? [])
+                                            .map((e) => e.toString()),
+                                      ].join('\n'),
+                                    );
+                                  } catch (_) {
+                                    if (mounted) {
+                                      setState(
+                                        () => _researchResult =
+                                            'Research could not be queued. Try again.',
+                                      );
+                                    }
+                                  } finally {
+                                    if (mounted) {
+                                      setState(() => _requesting = false);
+                                    }
+                                  }
+                                },
                           icon: const Icon(Icons.radar),
-                          label: const Text('Resume scheduled research'),
+                          label: Text(
+                            _requesting ? 'Queueing…' : 'Research now',
+                          ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 18),
-                  _heading('BUSINESS GROWTH'),
-                  _empty(
-                    '${growth['review'] ?? 'Waiting for catalogue review'}\n\n'
-                    'Group promotions this week: ${outcomes['VERIFIED'] ?? 0} verified, '
-                    '${outcomes['UNCERTAIN'] ?? 0} awaiting verification.\n'
-                    '${growth['revenueStatus'] ?? 'Revenue needs confirmed orders and payments.'}',
+                  if (_researchResult != null) _empty(_researchResult!),
+                  TextButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const DoctorScreen()),
+                    ),
+                    icon: const Icon(Icons.health_and_safety),
+                    label: const Text('Research blocked? Open Doctor'),
                   ),
-                  ..._maps(
-                    growth['listingPlans'],
-                  ).take(5).map((p) => _empty('${p['title']}\n${p['action']}')),
-                  ..._maps(growth['sourcingBriefs'])
-                      .take(3)
-                      .map(
-                        (p) => _empty(
-                          '${p['category']}\n${p['evidence']}\n${p['action']}',
+                  const SizedBox(height: 18),
+                  ExpansionTile(
+                    title: const Text('Growth & campaign results'),
+                    children: [
+                      _empty(
+                        '${growth['review'] ?? 'Waiting for catalogue review'}\n\n'
+                        'Group promotions this week: ${outcomes['VERIFIED'] ?? 0} verified, '
+                        '${outcomes['UNCERTAIN'] ?? 0} awaiting verification.\n'
+                        '${growth['revenueStatus'] ?? 'Revenue needs confirmed orders and payments.'}',
+                      ),
+                      ..._maps(growth['listingPlans'])
+                          .take(5)
+                          .map((p) => _empty('${p['title']}\n${p['action']}')),
+                      ..._maps(growth['sourcingBriefs'])
+                          .take(3)
+                          .map(
+                            (p) => _empty(
+                              '${p['category']}\n${p['evidence']}\n${p['action']}',
+                            ),
+                          ),
+                      ..._maps(growth['replyOutcomes']).map(
+                        (r) => _empty(
+                          'Replies: ${r['count']} ${r['outcome']} · average '
+                          '${((r['averageLatencySeconds'] as num?) ?? 0).round()} seconds from notification',
                         ),
                       ),
-                  ..._maps(growth['replyOutcomes']).map(
-                    (r) => _empty(
-                      'Replies: ${r['count']} ${r['outcome']} · average '
-                      '${((r['averageLatencySeconds'] as num?) ?? 0).round()} seconds from notification',
-                    ),
+                      const SizedBox(height: 22),
+                    ],
                   ),
-                  const SizedBox(height: 22),
                   _heading('DATA SOURCES'),
                   Row(
                     children: sources
@@ -226,8 +296,10 @@ class _MarketScreenState extends State<MarketScreen>
             '$count',
             style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
           ),
-          const Text(
-            'observations',
+          Text(
+            (s['lastObservedAt'] as num? ?? 0) > 0
+                ? 'Updated ${DateTime.fromMillisecondsSinceEpoch((s['lastObservedAt'] as num).toInt()).toLocal().toString().substring(0, 16)}'
+                : 'No evidence yet',
             style: TextStyle(color: Colors.white38, fontSize: 11),
           ),
           if ((s['averagePriceUgx'] as num? ?? 0).toInt() > 0)
@@ -267,6 +339,8 @@ class _MarketScreenState extends State<MarketScreen>
         ),
       ],
     ),
+    item: o,
+    kind: 'opportunity',
   );
   Widget _comparison(Map<String, dynamic> c) => _card(
     Column(
@@ -294,6 +368,8 @@ class _MarketScreenState extends State<MarketScreen>
         ),
       ],
     ),
+    item: c,
+    kind: 'comparison',
   );
   Widget _listing(Map<String, dynamic> l) => _card(
     Row(
@@ -328,6 +404,8 @@ class _MarketScreenState extends State<MarketScreen>
         ),
       ],
     ),
+    item: l,
+    kind: 'listing',
   );
   Widget _heading(String text) => Padding(
     padding: const EdgeInsets.only(bottom: 10),
@@ -349,11 +427,31 @@ class _MarketScreenState extends State<MarketScreen>
       style: TextStyle(color: Colors.white.withValues(alpha: .45)),
     ),
   );
-  Widget _card(Widget child) => Container(
-    margin: const EdgeInsets.only(bottom: 9),
-    padding: const EdgeInsets.all(14),
-    decoration: _box(),
-    child: child,
+  Widget _card(
+    Widget child, {
+    required Map<String, dynamic> item,
+    required String kind,
+  }) => InkWell(
+    borderRadius: BorderRadius.circular(17),
+    onTap: () => showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => InsightSheet(item: item, kind: kind),
+    ),
+    child: Container(
+      margin: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.all(14),
+      decoration: _box(),
+      child: Row(
+        children: [
+          Expanded(child: child),
+          const SizedBox(width: 8),
+          const Icon(Icons.chevron_right, size: 18, color: Colors.white38),
+        ],
+      ),
+    ),
   );
   Widget _tag(String text) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

@@ -443,6 +443,49 @@ class ModelGatewayBehaviorTest {
     }
 
     @Test
+    fun invalidPrimaryUsesDistinctFallbackOnce() = runBlocking {
+        config.groqApiKey = "invalid-primary"
+        config.groqApiKey2 = "working-fallback"
+        server.enqueue(MockResponse().setResponseCode(401).setBody("{\"error\":{\"code\":\"invalid_api_key\"}}"))
+        enqueueAll(groqContent("recovered"))
+        assertEquals("recovered",client().complete("hello"))
+        assertEquals(2,server.requestCount)
+        assertEquals("Bearer invalid-primary",server.takeRequest().getHeader("Authorization"))
+        assertEquals("Bearer working-fallback",server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test fun fallbackAloneCanServeRequests() = runBlocking {
+        config.groqApiKey = ""
+        config.groqApiKey2 = "working-fallback"
+        enqueueAll(groqContent("available"))
+        assertEquals("available",client().complete("hello"))
+        assertEquals(1,server.requestCount)
+        assertEquals("Bearer working-fallback",server.takeRequest().getHeader("Authorization"))
+    }
+
+    @Test fun tenKeyPoolReachesAvailableCredentialWithoutGatewayRetries() = runBlocking {
+        config.groqApiKey = "pool-1"
+        config.groqApiKey2 = "pool-2"
+        config.groqApiKeys = (1..10).joinToString(",") { "pool-$it" }
+        repeat(9) { server.enqueue(MockResponse().setResponseCode(429).setBody("{}")) }
+        enqueueAll(groqContent("available"))
+        assertEquals("available", client().complete("hello"))
+        assertEquals(10, server.requestCount)
+        repeat(10) { index -> assertEquals("Bearer pool-${index + 1}", server.takeRequest().getHeader("Authorization")) }
+        assertTrue(sleeps.isEmpty())
+    }
+
+    @Test fun twoInvalidCredentialsStopWithoutAnEndlessRetry() = runBlocking {
+        config.groqApiKey="first"
+        config.groqApiKey2="second"
+        repeat(2) { server.enqueue(MockResponse().setResponseCode(401).setBody("{}")) }
+        val error=runCatching { client().complete("hello") }.exceptionOrNull()
+        assertNotNull(error)
+        assertEquals(2,server.requestCount)
+        assertTrue(sleeps.isEmpty())
+    }
+
+    @Test
     fun http408RetriesAreBoundedToThreeAttempts() = runBlocking {
         // A dispatcher (not a fixed queue) because OkHttp may transparently retry
         // 408s internally per external attempt; the dispatcher can never starve.

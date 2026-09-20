@@ -35,3 +35,7 @@ Keep collector reads non-destructive: do not open apps or restart Amara merely t
 - Learning/change ledger and before/after listing/content evidence.
 
 Use the templates in `templates/`. Add a new run folder under `evidence/` rather than overwriting the baseline. Do not put PINs, API keys, personal message bodies, full numbers or customer payment details into repository files.
+
+## Week-capable build
+
+The defence-ad-v7 journal accepts `duration_ms` up to 604800000 through the existing TEST_EVALUATION_START receiver; omitted duration remains five hours. Use the returned exact journal filename and end timestamp with `scripts/evaluation/collect_five_hours.py`. It remains bounded and reports build segments and collection/event gaps. Do not infer uninterrupted operation from a completed clock. Configure the actual pilot scope and attach the phone before starting collection.

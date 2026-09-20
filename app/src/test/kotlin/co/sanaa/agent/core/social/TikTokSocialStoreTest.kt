@@ -37,14 +37,14 @@ class TikTokSocialStoreTest {
     }
     @Test fun rollingLimitsAndCreatorCooldownApplyEvenWhenFailed() {
         val s=store();val now=200000000L
-        for(i in 0..12) s.observe(co.sanaa.agent.core.ContentHashing.hash("limit$i"),"creator$i",JSONObject(),now)
-        for(i in 0..11) {
-            val time=now+i*1200001L
+        for(i in 0..48) s.observe(co.sanaa.agent.core.ContentHashing.hash("limit$i"),"creator$i",JSONObject(),now)
+        for(i in 0..47) {
+            val time=now+i*60_001L
             assertTrue(s.reserve(co.sanaa.agent.core.ContentHashing.hash("limit$i"),"creator$i","Specific comment $i",time))
             s.outcome(co.sanaa.agent.core.ContentHashing.hash("limit$i"),"FAILED")
         }
-        assertFalse(s.eligible(co.sanaa.agent.core.ContentHashing.hash("limit12"),"creator12",now+12*1200001L))
-        assertTrue(s.eligible(co.sanaa.agent.core.ContentHashing.hash("limit12"),"creator12",now+86400001L))
+        assertFalse(s.eligible(co.sanaa.agent.core.ContentHashing.hash("limit48"),"creator48",now+48*60_001L))
+        assertTrue(s.eligible(co.sanaa.agent.core.ContentHashing.hash("limit48"),"creator48",now+86400001L))
     }
     @Test fun restoredReservationCannotBeSentAgainAndMetricsRemainUnknownWhenMissing() {
         val s=store();val key="f".repeat(64);s.observe(key,"creator",JSONObject(),200000000)

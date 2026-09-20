@@ -99,6 +99,8 @@ data class BrainFailureRecord(
 
 /** Private, device-only memory stored at databases/amara_memory.db. */
 class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 21) {
+    private val ownerPower = OwnerPower(context)
+    fun ownerAllowsWork(): Boolean = ownerPower.isOn()
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
@@ -1469,16 +1471,24 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
     }
 
     @Synchronized
-    fun findSideEffectTransaction(idempotencyKey: String): SideEffectTransaction? = readableDatabase.query(
-        "side_effect_transactions",
-        arrayOf("idempotency_key", "capability", "target", "content_hash", "approval_id", "state", "created_at", "updated_at", "evidence"),
-        "idempotency_key = ?", arrayOf(idempotencyKey), null, null, null,
-    ).use { cursor ->
-        if (!cursor.moveToFirst()) null else SideEffectTransaction(
-            cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3),
-            if (cursor.isNull(4)) null else cursor.getLong(4),
-            SideEffectState.valueOf(cursor.getString(5)), cursor.getLong(6), cursor.getLong(7), cursor.getString(8),
-        )
+    fun findSideEffectTransaction(idempotencyKey: String): SideEffectTransaction? {
+        // Older startup scrubs redacted timestamp digits inside durable keys.
+        // Match that deterministic legacy spelling without rewriting receipts or
+        // creating new publication evidence. Ambiguity must block another effect.
+        val legacy = Redactor.redact(idempotencyKey)
+        val matches = readableDatabase.query(
+            "side_effect_transactions",
+            arrayOf("idempotency_key", "capability", "target", "content_hash", "approval_id", "state", "created_at", "updated_at", "evidence"),
+            "idempotency_key IN (?, ?)", arrayOf(idempotencyKey, legacy), null, null, null,
+        ).use { cursor -> buildList {
+            while (cursor.moveToNext()) add(SideEffectTransaction(
+                cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3),
+                if (cursor.isNull(4)) null else cursor.getLong(4),
+                SideEffectState.valueOf(cursor.getString(5)), cursor.getLong(6), cursor.getLong(7), cursor.getString(8),
+            ))
+        } }
+        return if (matches.size > 1) matches.first().copy(state = SideEffectState.UNCERTAIN,
+            evidence = "Multiple current/legacy transaction identities; review without replay") else matches.singleOrNull()
     }
 
     /** Full transaction listing (audit/certification use). */
@@ -1523,7 +1533,7 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
                WHERE idempotency_key = ? AND state = ?""",
             arrayOf<Any?>(
                 clockNow(), transaction.target.take(300), transaction.approvalId, transaction.state.name,
-                transaction.evidence.take(2_000), transaction.idempotencyKey, existing.state.name,
+                transaction.evidence.take(2_000), existing.idempotencyKey, existing.state.name,
             ),
         )
         return true
@@ -1542,7 +1552,7 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         writableDatabase.execSQL(
             """UPDATE side_effect_transactions SET state = ?, updated_at = ?, evidence = ?
                WHERE idempotency_key = ? AND state IN ($legalFromStates)""",
-            arrayOf<Any?>(newState.name, clockNow(), evidence.take(2_000), idempotencyKey),
+            arrayOf<Any?>(newState.name, clockNow(), evidence.take(2_000), existing.idempotencyKey),
         )
         return true
     }
@@ -1945,14 +1955,16 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         writableDatabase.insertOrThrow("owner_instructions", null, ContentValues().apply {
             put("timestamp", System.currentTimeMillis())
             put("instruction_text", text)
-            put("status", status)
+            put("status", persistedInstructionStatus(status))
             put("recurrence_rule", recurrenceRule)
         })
 
     @Synchronized
     fun updateInstruction(id: Long, status: String) {
-        writableDatabase.update("owner_instructions", ContentValues().apply { put("status", status) }, "id = ?", arrayOf(id.toString()))
+        writableDatabase.update("owner_instructions", ContentValues().apply { put("status", persistedInstructionStatus(status)) }, "id = ?", arrayOf(id.toString()))
     }
+
+    private fun persistedInstructionStatus(status: String): String = if (status == "queued") "pending" else status
 
     @Synchronized
     fun recordAction(

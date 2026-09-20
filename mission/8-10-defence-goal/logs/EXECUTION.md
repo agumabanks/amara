@@ -23,3 +23,9 @@ Date/time; task ID; problem/evidence; change; implementation paths/build; checks
 FU-01 / WA-03: read-only queue snapshot found 12 unresolved inbound records. Implemented identity-bound follow-up targeting, persisted drafts, stable transaction keys and persistent review for uncertainty. See [evidence](../evidence/FOLLOWUP-IDENTITY-20260906.md). No unresolved customer was automatically resent. Acceptance gates remain unproven.
 
 V6 deployment completed: 57 targeted tests passed; APK c52264cde22e2f7350c835c5fbc65521af084852fb408ecca8cdbda93430d20f; full OPPO readiness certificate passed. Dashboard HTML, PDF and preview refreshed. FU-01 and WA-03 remain in progress because phone binding, policy and live reconciliation evidence are outstanding.
+
+## 2026-09-09 — Defence review and ad implementation
+
+Implemented catalogue-bound portrait artwork, public WhatsApp setting, truthful price labels, per-group profiles and topic filters, structured service checklist and seven-day journal capability. Reviewed remaining tasks against source. Device absent; no publications, messages, live listing writes or pilot run. See [implementation evidence](../IMPLEMENTATION-20260909.md).
+
+Connected OPPO inspected: update rejected due to mismatched signing certificates. Local candidate keys checked without finding a match. Existing app passed non-destructive device certification. No uninstall or data reset. Original build-machine debug keystore required. Details in [implementation review](../IMPLEMENTATION-20260909.md).

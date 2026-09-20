@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_on": "2026-09-06",
+  "updated_on": "2026-09-13",
   "states": [
     "PLANNED",
     "NEEDS_OWNER",
@@ -40,10 +40,11 @@
         "G9"
       ],
       "depends_on": [],
-      "acceptance": "D1\u2013D3 and D6 recorded with owner authority; commercial policy reflects approved decisions.",
-      "next_action": "Prepare service brief from Soko; ask owner only for missing price/authority/target inputs.",
+      "acceptance": "D1–D3 and D6 recorded with owner authority; commercial policy reflects approved decisions.",
+      "next_action": "Five published service prices/turnarounds reviewed. Await owner discount/delivery authority, priorities and weekly value/acceptance decisions.",
       "evidence": [
-        "logs/DECISIONS.md"
+        "logs/DECISIONS.md",
+        "SERVICE-FACTS-20260909.md"
       ],
       "implementation": [],
       "owner": "Amara product/engineering; owner reviews business decisions",
@@ -61,23 +62,24 @@
       ],
       "depends_on": [],
       "acceptance": "Same-name/short-name/direct/group scenarios pass target-bound checks; no cross-chat context; lost routes hold visibly.",
-      "next_action": "Run authorised controlled identity cases, then collect real incoming evidence.",
+      "next_action": "Outgoing notification filtering and source-time ordering are installed and regression-tested. Verify live origin-route recovery and exact-recipient delivery; historical routing holds remain.",
       "evidence": [
-        "../amara-whatsapp-origin-groups.md"
+        "../amara-whatsapp-origin-groups.md",
+        "GAP-POLISH-20260913.md"
       ],
       "implementation": [
         "app/src/main/kotlin/co/sanaa/agent/modules/WhatsAppConversationRoutes.kt",
         "app/src/main/kotlin/co/sanaa/agent/modules/HumanConversationEngine.kt"
       ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-13"
     },
     {
       "id": "WA-02",
       "priority": "P0",
       "module": "WhatsApp",
       "title": "Deliver useful replies and quote-ready handoffs",
-      "state": "PLANNED",
+      "state": "IN_PROGRESS",
       "gate_ids": [
         "G2",
         "G3"
@@ -87,11 +89,18 @@
         "WA-01"
       ],
       "acceptance": "G2 sample/quality target and approved qualification/handoff brief met.",
-      "next_action": "Review real unresolved cases and customer questions; define useful reply and required service inputs.",
-      "evidence": [],
-      "implementation": [],
+      "next_action": "Validate the installed contextual reply, payment/delivery and verified handoff fixes on real inbound conversations; obtain missing business facts.",
+      "evidence": [
+        "WHATSAPP-AUTOPILOT-20260909.md",
+        "GAP-POLISH-20260913.md"
+      ],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/modules/ConversationReplyPolicy.kt",
+        "app/src/main/kotlin/co/sanaa/agent/modules/HumanConversationEngine.kt",
+        "app/src/main/kotlin/co/sanaa/agent/modules/WhatsAppCommerceAssistant.kt"
+      ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-13"
     },
     {
       "id": "WA-03",
@@ -105,15 +114,19 @@
       ],
       "depends_on": [],
       "acceptance": "Every historical unresolved item has verified delivery or an explicit unresolved/owner disposition.",
-      "next_action": "Triage 12 retained review cases; reconcile delivery read-only and restore originating routes only with verified evidence.",
+      "next_action": "87 holds at September 13 07:29 UTC: 44 origin verification, 38 queued destination, 3 uncertain delivery, 2 business handoffs. Review exact conversations or record individual owner dispositions; do not mass-resend.",
       "evidence": [
         "../amara-whatsapp-deep-repair.md",
         "evidence/baseline.json",
-        "evidence/FOLLOWUP-IDENTITY-20260906.md"
+        "evidence/FOLLOWUP-IDENTITY-20260906.md",
+        "GAP-POLISH-20260913.md"
       ],
-      "implementation": [],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/core/work/WorkQueue.kt",
+        "flutter_ui/lib/screens/work/work_screen.dart"
+      ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-13"
     },
     {
       "id": "FU-01",
@@ -154,9 +167,10 @@
       ],
       "depends_on": [],
       "acceptance": "v5 pause reason/resume works live; intended destinations have exact identity and writable membership; failures remain counted.",
-      "next_action": "Review failed saved destinations and test safe recovery; do not assume no-result is a transient click failure.",
+      "next_action": "Cross-group cooldown repaired and one send verified live. Correct individually paused missing destinations; reconcile uncertain photo delivery without resending.",
       "evidence": [
-        "../amara-group-log-review-20260906.md"
+        "../amara-group-log-review-20260906.md",
+        "WHATSAPP-AUTOPILOT-20260909.md"
       ],
       "implementation": [
         "app/src/main/kotlin/co/sanaa/agent/modules/WhatsAppGroupSettings.kt",
@@ -170,7 +184,7 @@
       "priority": "P1",
       "module": "Groups",
       "title": "Add audience purpose and group participation profiles",
-      "state": "PLANNED",
+      "state": "IN_PROGRESS",
       "gate_ids": [
         "G4"
       ],
@@ -179,11 +193,17 @@
         "GR-01"
       ],
       "acceptance": "Owner-approved profile covers group rules, relevant offers, listening/reply behaviour and cadence; useful participation reviewed.",
-      "next_action": "Draft profile and reply-vs-listen examples for owner-designated groups.",
-      "evidence": [],
-      "implementation": [],
+      "next_action": "Configure owner group profiles; verify topical selection and useful participation live.",
+      "evidence": [
+        "IMPLEMENTATION-20260909.md",
+        "WHATSAPP-AUTOPILOT-20260909.md"
+      ],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/modules/WhatsAppGroupSettings.kt",
+        "flutter_ui/lib/screens/settings/whatsapp_groups_screen.dart"
+      ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-09"
     },
     {
       "id": "GR-03",
@@ -212,7 +232,7 @@
       "priority": "P1",
       "module": "TikTok",
       "title": "Create a consistent Sanaa Media editorial programme",
-      "state": "PLANNED",
+      "state": "IN_PROGRESS",
       "gate_ids": [
         "G5"
       ],
@@ -220,38 +240,57 @@
         "BUS-01"
       ],
       "acceptance": "Approved content series, catalogue facts, media permissions and enquiry route; G5 publication/quality evidence.",
-      "next_action": "Draft a week of service-focused concepts and define baseline audience metrics.",
-      "evidence": [],
-      "implementation": [],
+      "next_action": "Photo/video library reuse verified on device (6–7 ms hits); collect repeated publication/audio outcomes and qualified enquiries/orders for the installed channel-selection policy.",
+      "evidence": [
+        "IMPLEMENTATION-20260909.md",
+        "MOTION-ADS-20260909.md",
+        "CREATIVE-LIBRARY-20260909.md"
+      ],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/modules/AmaraAdSpec.kt",
+        "app/src/main/kotlin/co/sanaa/agent/actions/AmaraAdRenderer.kt",
+        "app/src/main/kotlin/co/sanaa/agent/actions/AmaraMotionScene.kt",
+        "app/src/main/kotlin/co/sanaa/agent/actions/AmaraVideoEncoder.kt",
+        "app/src/main/kotlin/co/sanaa/agent/modules/ShopLocationHashtags.kt",
+        "app/src/main/kotlin/co/sanaa/agent/actions/AmaraCreativeLibrary.kt",
+        "app/src/main/kotlin/co/sanaa/agent/modules/TikTokProductContent.kt"
+      ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-09"
     },
     {
       "id": "TT-02",
       "priority": "P0",
       "module": "TikTok",
       "title": "Resolve social interaction uncertainty and measure usefulness",
-      "state": "PLANNED",
+      "state": "IN_PROGRESS",
       "gate_ids": [
         "G1",
         "G5"
       ],
       "depends_on": [],
       "acceptance": "Uncertain comments reconciled or held; future interactions verified and relevant; no blind duplicates.",
-      "next_action": "Review five uncertain-comment outcomes before increasing interaction volume.",
+      "next_action": "Validate exact-thread notification replies on live notifications; preserve seven historical uncertain comments without blind resend.",
       "evidence": [
-        "evidence/baseline.json"
+        "evidence/baseline.json",
+        "IMPLEMENTATION-20260909.md",
+        "MOTION-ADS-20260909.md"
       ],
-      "implementation": [],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/modules/TikTokSocialCycle.kt",
+        "app/src/main/kotlin/co/sanaa/agent/core/social/TikTokSocialStore.kt",
+        "app/src/main/kotlin/co/sanaa/agent/modules/TikTokCommentNotifications.kt",
+        "app/src/main/kotlin/co/sanaa/agent/modules/TikTokNotificationReview.kt"
+      ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-09"
     },
     {
       "id": "SO-01",
       "priority": "P0",
       "module": "Soko",
       "title": "Make first service listings complete and trustworthy",
-      "state": "PLANNED",
+      "state": "IN_PROGRESS",
       "gate_ids": [
         "G6"
       ],
@@ -259,18 +298,24 @@
         "BUS-01"
       ],
       "acceptance": "At least five actual offerings meet buying checklist; three authorised improvements have before/after verification.",
-      "next_action": "Audit actual catalogue against inclusions, pricing basis, turnaround, inputs and examples.",
-      "evidence": [],
-      "implementation": [],
+      "next_action": "Review actual service checklist findings and approve grounded listing improvements; preserve before/after evidence.",
+      "evidence": [
+        "IMPLEMENTATION-20260909.md",
+        "SERVICE-FACTS-20260909.md"
+      ],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/modules/ServiceListingChecklist.kt",
+        "app/src/main/kotlin/co/sanaa/agent/core/growth/MarketGrowthReview.kt"
+      ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-09"
     },
     {
       "id": "SO-02",
       "priority": "P0",
       "module": "Soko",
       "title": "Connect enquiries to paid orders and costs",
-      "state": "PLANNED",
+      "state": "IN_PROGRESS",
       "gate_ids": [
         "G6",
         "G9"
@@ -280,18 +325,22 @@
         "WA-02"
       ],
       "acceptance": "Unique traceable enquiry/order/payment records; direct/assisted/unknown attribution; refunds/costs reconciled.",
-      "next_action": "Define minimal order evidence and owner reconciliation workflow; do not infer sales from posts.",
-      "evidence": [],
-      "implementation": [],
+      "next_action": "Order-state monitoring is implemented. Complete explicit enquiry-to-paid-order attribution, cost accounting and owner reconciliation; do not infer sales from posts.",
+      "evidence": [
+        "GAP-POLISH-20260913.md"
+      ],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/modules/ManagerOrderMonitor.kt"
+      ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-13"
     },
     {
       "id": "LE-01",
       "priority": "P1",
       "module": "Learning",
       "title": "Turn market/conversation feedback into measured improvements",
-      "state": "PLANNED",
+      "state": "IN_PROGRESS",
       "gate_ids": [
         "G7"
       ],
@@ -299,19 +348,24 @@
         "SO-01",
         "TT-01"
       ],
-      "acceptance": "Three reviewed observation\u2192change\u2192outcome chains, including one measured positive result.",
-      "next_action": "Choose one customer uncertainty for Jiji/Jumia research; use experiment template and retention rules.",
-      "evidence": [],
-      "implementation": [],
+      "acceptance": "Three reviewed observation→change→outcome chains, including one measured positive result.",
+      "next_action": "Persistent feedback and learning decisions exist. Run a grounded comparison proving a useful outcome change.",
+      "evidence": [
+        "GAP-POLISH-20260913.md"
+      ],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/core/knowledge/LearningLoop.kt",
+        "app/src/main/kotlin/co/sanaa/agent/core/work/LearningOutcomePolicy.kt"
+      ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-13"
     },
     {
       "id": "RP-01",
       "priority": "P0",
       "module": "Reporting",
       "title": "Give the owner one useful truthful daily report",
-      "state": "PLANNED",
+      "state": "IN_PROGRESS",
       "gate_ids": [
         "G8",
         "G9"
@@ -320,18 +374,22 @@
         "BUS-01"
       ],
       "acceptance": "Seven reports separate attempts, verified delivery, uncertainty, business results, costs and owner decisions.",
-      "next_action": "Use daily template and review first report with owner; record source completeness.",
-      "evidence": [],
-      "implementation": [],
+      "next_action": "Manager report queue and local attention notifications exist. Configure the manager destination and verify daily report delivery and usefulness.",
+      "evidence": [
+        "GAP-POLISH-20260913.md"
+      ],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/core/work/ManagerReportWork.kt"
+      ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-13"
     },
     {
       "id": "OBS-01",
       "priority": "P0",
       "module": "Evidence",
       "title": "Enable a complete seven-day observation plan",
-      "state": "PLANNED",
+      "state": "IN_PROGRESS",
       "gate_ids": [
         "G2",
         "G8",
@@ -339,13 +397,17 @@
       ],
       "depends_on": [],
       "acceptance": "Journalling/collector plan covers full scoped week with interruption/build segmentation and private evidence retention.",
-      "next_action": "Extend or orchestrate bounded logger safely; prove no silent measurement gaps before acceptance.",
+      "next_action": "Install week-capable build; freeze observation scope and validate live journal/collector coverage before the pilot.",
       "evidence": [
-        "EVALUATION-PLAN.md"
+        "EVALUATION-PLAN.md",
+        "IMPLEMENTATION-20260909.md"
       ],
-      "implementation": [],
+      "implementation": [
+        "app/src/main/kotlin/co/sanaa/agent/core/EvaluationJournal.kt",
+        "scripts/evaluation/collect_five_hours.py"
+      ],
       "owner": "Amara product/engineering; owner reviews business decisions",
-      "updated_on": "2026-09-06"
+      "updated_on": "2026-09-09"
     },
     {
       "id": "RUN-01",

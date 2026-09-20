@@ -16,9 +16,10 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 class BackendSync(private val context: Context, private val config: SecureConfig, private val memory: AmaraMemory? = null) {
-    private val client = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(45, TimeUnit.SECONDS).build()
+    private val client = OkHttpClient.Builder().dns(BackendDns.forUrl { config.backendUrl }).connectTimeout(15, TimeUnit.SECONDS).readTimeout(45, TimeUnit.SECONDS).build()
 
     suspend fun registerAndSync(): JSONObject {
+        require(co.sanaa.agent.core.OwnerPower(context).isOn()) { "Amara is off by owner request" }
         require(config.configSyncEnabled) { "Configuration sync is disabled by the owner." }
         ensureDeviceId()
         if (config.agentToken.isBlank()) {
@@ -30,12 +31,26 @@ class BackendSync(private val context: Context, private val config: SecureConfig
         return fetchConfig()
     }
 
+    fun pairingDeviceId(): String { ensureDeviceId(); return config.deviceId }
+
+    suspend fun pair(code: String): Boolean {
+        require(config.ownerAllowsWork()) { "Turn Amara on before connecting to Cards." }
+        require(config.configSyncEnabled) { "Configuration sync is disabled on this device." }
+        require(code.matches(Regex("[a-fA-F0-9]{24}"))) { "Enter the 24-character code from Cards Devices." }
+        ensureDeviceId()
+        val response = post("pair", JSONObject().put("device_id", config.deviceId).put("code", code.lowercase()), authenticated = false)
+        config.agentToken = response.getString("agent_token")
+        return runCatching { fetchConfig() }.isSuccess
+    }
+
     suspend fun fetchConfig(): JSONObject {
+        require(co.sanaa.agent.core.OwnerPower(context).isOn()) { "Amara is off by owner request" }
         require(config.configSyncEnabled) { "Configuration sync is disabled by the owner." }
         return get("config/${config.deviceId}").also(config::saveRemoteConfig)
     }
 
     suspend fun status(): JSONObject {
+        require(co.sanaa.agent.core.OwnerPower(context).isOn()) { "Amara is off by owner request" }
         require(config.configSyncEnabled) { "Configuration sync is disabled by the owner." }
         return get("status/${config.deviceId}")
     }
@@ -96,7 +111,7 @@ class BackendSync(private val context: Context, private val config: SecureConfig
     }
 
     private fun ensureDeviceId() {
-        if (config.deviceId.isBlank()) config.deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown-device"
+        if (config.deviceId.isBlank()) config.deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: java.util.UUID.randomUUID().toString()
     }
 
     private suspend fun get(path: String): JSONObject = request(Request.Builder().url(url(path)).get().authenticated().build())
@@ -109,7 +124,11 @@ class BackendSync(private val context: Context, private val config: SecureConfig
     private suspend fun request(request: Request): JSONObject = withContext(Dispatchers.IO) {
         client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IllegalStateException("Backend returned HTTP ${response.code}: $body")
+            if (!response.isSuccessful) throw IllegalStateException(when (response.code) {
+                401 -> "Cards connection needs pairing. Open Settings → Connect to Cards admin."
+                429 -> "Cards is receiving too many requests. Try again in a minute."
+                else -> "Cards could not complete the request (HTTP ${response.code}). Try again shortly."
+            })
             JSONObject(body)
         }
     }

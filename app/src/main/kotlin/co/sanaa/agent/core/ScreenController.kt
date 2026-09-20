@@ -45,33 +45,13 @@ object ScreenController {
         } catch (e: SecurityException) {
             Log.w(TAG, "wakeScreen: acquire denied: ${e.javaClass.simpleName}")
         }
+        // Waking is not unlocking. The foreground guard uses Android's normal
+        // dismissal callback; a legacy disableKeyguard token can leave ColorOS
+        // reporting input-restricted even while an app is visible.
         try {
-            val keyguard = context.getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-            // A SECURE keyguard can never be dismissed programmatically; attempting it
-            // is pointless and misleading. Only nonsecure lock surfaces get the legacy
-            // best-effort dismiss, which may clear swipe-only locks.
-            if (keyguard != null && !keyguard.isKeyguardSecure) {
-                disableNonsecureKeyguardBestEffort(keyguard)
-            }
+            if (wakeLock?.isHeld == true) wakeLock.release()
         } catch (e: RuntimeException) {
-            Log.w(TAG, "wakeScreen: keyguard probe failed: ${e.javaClass.simpleName}")
-        } finally {
-            try {
-                if (wakeLock?.isHeld == true) wakeLock.release()
-            } catch (e: RuntimeException) {
-                Log.w(TAG, "wakeScreen: release failed: ${e.javaClass.simpleName}")
-            }
-        }
-    }
-
-    private fun disableNonsecureKeyguardBestEffort(keyguard: KeyguardManager) {
-        try {
-            @Suppress("DEPRECATION")
-            keyguard.newKeyguardLock("SanaaAgent").disableKeyguard()
-        } catch (e: SecurityException) {
-            Log.w(TAG, "nonsecure keyguard dismiss denied: ${e.javaClass.simpleName}")
-        } catch (e: IllegalStateException) {
-            Log.w(TAG, "nonsecure keyguard dismiss unavailable: ${e.javaClass.simpleName}")
+            Log.w(TAG, "wakeScreen: release failed: ${e.javaClass.simpleName}")
         }
     }
 

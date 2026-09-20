@@ -1,5 +1,7 @@
 package co.sanaa.agent.overlay
 
+import co.sanaa.agent.core.OverlayChipState
+
 import android.content.Context
 import android.os.Looper
 import android.view.MotionEvent
@@ -105,15 +107,15 @@ class OverlayLifecycleTest {
     }
 
     @Test
-    fun endingActingLeavesObservationalChipUntouchable() {
+    fun endingActingRestoresOwnerControls() {
         val service = startedService()
         RuntimeStatusBus.beginActing()
         RuntimeStatusBus.report(status())
         RuntimeStatusBus.endActing()
         RuntimeStatusBus.report(status())
         val flags = service.currentLayoutParams()?.flags ?: throw AssertionError("params missing")
-        assertNotEquals(0, flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
-        assertEquals(0, drag(service))
+        assertEquals(0, flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
+
     }
 
     /** Drags the chip left by 500px; returns 1 when params moved, 0 when inert. */
@@ -239,7 +241,7 @@ class OverlayLifecycleTest {
     fun fullCardBudgetReservesItsFixedChromeAndNeverAcceptsTouches() {
         val service = startedService()
         assertTrue(service.chipTextWidthBudgetPx() < service.chipWidthBudgetPx())
-        assertNotEquals(
+        assertEquals(
             0,
             service.currentLayoutParams()!!.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
         )
@@ -249,8 +251,8 @@ class OverlayLifecycleTest {
     fun idleChipIsGenuinelyNonTouchableAndNeverCarriesAFocusableFlag() {
         val service = startedService()
         val params = service.currentLayoutParams()!!
-        assertNotEquals(
-            "idle chip must keep FLAG_NOT_TOUCHABLE",
+        assertEquals(
+            "idle chip allows owner touch",
             0,
             params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
         )
@@ -264,7 +266,7 @@ class OverlayLifecycleTest {
         val down = MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 0f, 0f, 0)
         val consumed = view.dispatchTouchEvent(down)
         down.recycle()
-        assertFalse("idle chip must not consume any touch event", consumed)
+        assertTrue("idle chip accepts owner drag and expansion gestures", consumed)
     }
 
     @Test
@@ -298,14 +300,25 @@ class OverlayLifecycleTest {
     }
 
     @Test
+    fun blockedCompanionKeepsRecoveryControlsExpanded() {
+        val service = startedService()
+        service.render(OverlayChipState(phase = RuntimePhase.FAILED, working = true, acting = false,
+            blocked = true, offline = false, status = status(phase = RuntimePhase.FAILED)), false)
+        service.toggleExpanded()
+        service.render(OverlayChipState(phase = RuntimePhase.FAILED, working = true, acting = false,
+            blocked = true, offline = false, status = status(phase = RuntimePhase.FAILED)), false)
+        assertTrue(service.isExpandedForTest())
+    }
+
+    @Test
     fun expandedPanelIsTheOnlyTouchableBranchAndItIsNeverOpenedAtStart() {
         val service = startedService()
         val view = service.currentOverlayViewForTest()!!
         val panel = view.findViewById<LinearLayout>(R.id.overlay_expanded)
         assertEquals("expanded panel must start hidden", View.GONE, panel.visibility)
         assertFalse("expanded state must be false at start", service.isExpandedForTest())
-        assertNotEquals(
-            "no touch path can be live before the user explicitly opens the panel",
+        assertEquals(
+            "idle chip can be tapped to open its controls",
             0,
             service.currentLayoutParams()!!.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
         )
@@ -321,8 +334,8 @@ class OverlayLifecycleTest {
         Shadows.shadowOf(Looper.getMainLooper()).idle()
         val activeFlags = service.currentLayoutParams()!!.flags
         assertNotEquals("FLAG_NOT_TOUCHABLE must remain set during acting", 0, activeFlags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE)
-        assertEquals(
-            "the acting transition must never flip the touchable bit",
+        assertNotEquals(
+            "the acting transition disables owner touch to prevent interference",
             idleFlags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             activeFlags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
         )

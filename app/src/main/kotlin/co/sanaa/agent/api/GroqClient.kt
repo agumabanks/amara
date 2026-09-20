@@ -75,7 +75,7 @@ class GroqClient(
      * task id threaded into every durable brain-failure row for this call.
      */
     suspend fun completeJson(prompt: String, schema: ModelSchema?, correlationId: String): JSONObject {
-        val key = config.groqApiKey.ifBlank { throw IllegalStateException("Groq API key is not configured") }
+        val key = configuredKeys().firstOrNull() ?: throw IllegalStateException("Groq API key is not configured")
         val stage = schema?.name ?: STAGE_CHAT_JSON
         // Defense in depth: no credential material can reach the provider request body
         // even if an upstream caller forgot to redact.
@@ -112,7 +112,7 @@ class GroqClient(
      */
     suspend fun complete(prompt: String, jsonOnly: Boolean = false, correlationId: String = ""): String = withContext(Dispatchers.IO) {
         if (jsonOnly) return@withContext completeJson(prompt, null, correlationId).toString()
-        val key = config.groqApiKey.ifBlank { throw IllegalStateException("Groq API key is not configured") }
+        val key = configuredKeys().firstOrNull() ?: throw IllegalStateException("Groq API key is not configured")
         gateway.execute(STAGE_CHAT_TEXT, config.groqModel, allowRepair = false, correlationId = correlationId) { _ ->
             val messages = JSONArray()
                 .put(JSONObject().put("role", "system").put("content", systemPrompt(jsonMode = false)))
@@ -132,10 +132,13 @@ class GroqClient(
     /** Local preflight; never opens an app or sends a screenshot. */
     fun visionConfigurationBlocker(): String? = when {
         !config.visionConsent -> "The owner has not consented to sending screenshots to the vision model."
-        config.groqApiKey.isBlank() -> "Groq API key is not configured"
+        configuredKeys().isEmpty() -> "Groq API key is not configured"
         config.groqVisionModel.isBlank() -> "A Groq vision model is not configured"
         else -> null
     }
+
+    /** Safe health predicate; does not reveal or test a credential. */
+    fun hasConfiguredKey(): Boolean = configuredKeys().isNotEmpty()
 
     /** Legacy vision entry point: strict JSON, no schema validation. */
     suspend fun completeVisionJson(prompt: String, imageFile: File): JSONObject =
@@ -148,7 +151,7 @@ class GroqClient(
     suspend fun completeVisionJson(prompt: String, imageFile: File, schema: ModelSchema?, correlationId: String): JSONObject {
         return withContext(Dispatchers.IO) {
             require(config.visionConsent) { "The owner has not consented to sending screenshots to the vision model." }
-            val key = config.groqApiKey.ifBlank { throw IllegalStateException("Groq API key is not configured") }
+            val key = configuredKeys().firstOrNull() ?: throw IllegalStateException("Groq API key is not configured")
             val model = config.groqVisionModel.ifBlank { throw IllegalStateException("A Groq vision model is not configured") }
             require(imageFile.isFile && imageFile.length() in 1..MAX_IMAGE_BYTES) {
                 "Visual evidence must be a private image under ${MAX_IMAGE_BYTES / 1_000_000} MB"
@@ -226,6 +229,7 @@ class GroqClient(
      * logged, never persisted, and never echoed back to the provider.
      */
     private fun wireCall(key: String, body: JSONObject, stage: String): WireOutcome {
+        check(config.ownerAllowsWork()) { "Amara is off by owner request" }
         val endpoint = trustedHttpsEndpoint(config.groqEndpoint)
         val request = Request.Builder().url(endpoint).header("Authorization", "Bearer $key")
             .post(body.toString().toRequestBody(JSON)).build()
@@ -293,19 +297,33 @@ class GroqClient(
         return outcome
     }
 
-    /** Fail over once to the backend-managed secondary credential on rate limits. */
+    /**
+     * Fail over through the owner's configured credential pool only for exhausted
+     * or rejected credentials. A malformed request is never replayed under another
+     * key, and key material is never logged.
+     */
     private fun wireCallWithFallback(primaryKey: String, body: JSONObject, stage: String): WireOutcome {
-        val primary = wireCall(primaryKey, body, stage)
-        val fallbackKey = config.groqApiKey2
-        if (primary is WireOutcome.Failed &&
-            primary.error.kind == ModelFailureKind.RATE_LIMITED &&
-            fallbackKey.isNotBlank() && fallbackKey != primaryKey
-        ) {
-            Log.i(TAG, "Primary key rate limited (429), retrying with fallback key")
-            return wireCall(fallbackKey, body, stage)
+        var outcome = wireCall(primaryKey, body, stage)
+        for (fallbackKey in configuredKeys().filter { it != primaryKey }) {
+            val retryableCredential = outcome is WireOutcome.Failed &&
+                (outcome.error.kind == ModelFailureKind.RATE_LIMITED ||
+                    (outcome.error.kind == ModelFailureKind.PERMANENT_CLIENT &&
+                        "HTTP_401" in outcome.error.validationErrors))
+            if (!retryableCredential) break
+            Log.i(TAG, "Configured model credential unavailable; trying next configured credential")
+            outcome = wireCall(fallbackKey, body, stage)
         }
-        return primary
+        return outcome
     }
+
+    /** De-duplicate and bound a remote-configured pool without ever revealing it. */
+    private fun configuredKeys(): List<String> = sequenceOf(config.groqApiKey, config.groqApiKey2, config.groqApiKeys)
+        .flatMap { it.split(Regex("[\\n,;]+")).asSequence() }
+        .map(String::trim)
+        .filter(String::isNotBlank)
+        .distinct()
+        .take(MAX_CONFIGURED_KEYS)
+        .toList()
 
     private fun classifiedTransportFailure(error: IOException, stage: String): ModelResponseException {
         val kind = if (error is SocketTimeoutException) ModelFailureKind.TIMEOUT else ModelFailureKind.TRANSPORT
@@ -400,6 +418,8 @@ class GroqClient(
         const val REQUEST_ID_HEADER = "X-Request-Id"
         const val CONNECT_TIMEOUT_SECONDS = 15L
         const val DEFAULT_READ_TIMEOUT_MS = 45_000L
+        /** Bound failover work even if a malformed remote config contains many keys. */
+        const val MAX_CONFIGURED_KEYS = 16
         const val MAX_IMAGE_BYTES = 8_000_000
         const val STAGE_CHAT_JSON = "chat_json"
         const val STAGE_CHAT_TEXT = "chat_text"

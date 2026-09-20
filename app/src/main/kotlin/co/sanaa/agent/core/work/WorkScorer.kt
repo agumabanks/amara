@@ -46,7 +46,7 @@ object WorkScorer {
         WorkKind.SOKO_PRICE_ADJUST -> 350.0
         WorkKind.SOKO_INVENTORY_CHECK -> 200.0
         WorkKind.TIKTOK_COMMENT_REPLY -> 40.0
-        WorkKind.TIKTOK_POST_PUBLISH -> 250.0
+        WorkKind.TIKTOK_POST_PUBLISH, WorkKind.TIKTOK_STORY_PUBLISH, WorkKind.YOUTUBE_SHORT_PUBLISH -> 250.0
         WorkKind.TIKTOK_ANALYTICS_CHECK -> 60.0
         WorkKind.JIJI_SCRAPE -> 200.0
         WorkKind.JUMIA_CAPTURE -> 140.0
@@ -73,7 +73,7 @@ object WorkScorer {
         WorkKind.SOKO_PRICE_ADJUST -> 6.0
         WorkKind.SOKO_INVENTORY_CHECK -> 12.0
         WorkKind.TIKTOK_COMMENT_REPLY -> 4.0
-        WorkKind.TIKTOK_POST_PUBLISH -> 6.0
+        WorkKind.TIKTOK_POST_PUBLISH, WorkKind.TIKTOK_STORY_PUBLISH, WorkKind.YOUTUBE_SHORT_PUBLISH -> 6.0
         WorkKind.TIKTOK_ANALYTICS_CHECK -> 8.0
         WorkKind.JIJI_SCRAPE -> 8.0
         WorkKind.JUMIA_CAPTURE -> 8.0
@@ -100,7 +100,7 @@ object WorkScorer {
         WorkKind.SOKO_PRICE_ADJUST -> 75
         WorkKind.SOKO_INVENTORY_CHECK -> 120
         WorkKind.TIKTOK_COMMENT_REPLY -> 30
-        WorkKind.TIKTOK_POST_PUBLISH -> 120
+        WorkKind.TIKTOK_POST_PUBLISH, WorkKind.TIKTOK_STORY_PUBLISH, WorkKind.YOUTUBE_SHORT_PUBLISH -> 120
         WorkKind.TIKTOK_ANALYTICS_CHECK -> 60
         WorkKind.JIJI_SCRAPE -> 180
         WorkKind.JUMIA_CAPTURE -> 90
@@ -127,7 +127,7 @@ object WorkScorer {
         WorkKind.SOKO_PRICE_ADJUST -> RiskTier.MEDIUM
         WorkKind.SOKO_INVENTORY_CHECK -> RiskTier.LOW
         WorkKind.TIKTOK_COMMENT_REPLY -> RiskTier.LOW
-        WorkKind.TIKTOK_POST_PUBLISH -> RiskTier.MEDIUM
+        WorkKind.TIKTOK_POST_PUBLISH, WorkKind.TIKTOK_STORY_PUBLISH, WorkKind.YOUTUBE_SHORT_PUBLISH -> RiskTier.MEDIUM
         WorkKind.TIKTOK_ANALYTICS_CHECK -> RiskTier.LOW
         WorkKind.JIJI_SCRAPE -> RiskTier.LOW
         WorkKind.JUMIA_CAPTURE -> RiskTier.LOW

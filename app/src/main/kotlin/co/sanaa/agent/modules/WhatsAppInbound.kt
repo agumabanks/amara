@@ -11,6 +11,7 @@ data class WhatsAppInbound(
     val isMissedCall: Boolean = false,
     val messageTimestamp: Long = 0L,
     val conversationIdentity: String = "",
+    val senderPhone: String = "",
 ) {
     val target: String get() = WhatsAppNotificationParser.cleanConversationTitle(if (isGroup) conversation else sender)
     val signature: String get() = "$conversationIdentity|$sender|$conversation|$message|$isMissedCall|$messageTimestamp"
@@ -45,9 +46,12 @@ object WhatsAppNotificationParser {
         val latestMessage = extras.getParcelableArray(Notification.EXTRA_MESSAGES)?.lastOrNull() as? Bundle
         val text = latestMessage?.getCharSequence("text")?.toString()?.trim().orEmpty()
             .ifBlank { extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty() }
-        val messageSender = if (android.os.Build.VERSION.SDK_INT >= 28) {
+        val messageSender = (if (android.os.Build.VERSION.SDK_INT >= 28) {
             (latestMessage?.getParcelable("sender_person") as? android.app.Person)?.name?.toString()?.trim().orEmpty()
-        } else latestMessage?.getCharSequence("sender")?.toString()?.trim().orEmpty()
+        } else "").ifBlank { latestMessage?.getCharSequence("sender")?.toString()?.trim().orEmpty() }
+        // MessagingStyle uses a null sender for the phone owner's own messages.
+        // Only legacy notifications without structured messages may fall back to the title.
+        if (latestMessage != null && messageSender.isBlank()) return null
         val sender = messageSender.ifBlank { title.substringBefore(" @ ").substringBefore(":").trim() }
         val inferredGroup = if (extras.containsKey(Notification.EXTRA_IS_GROUP_CONVERSATION))
             extras.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION) else conversationTitle.isNotBlank() || title.contains(" @ ")
@@ -58,7 +62,8 @@ object WhatsAppNotificationParser {
         if (sender.equals("WhatsApp", true) || text.startsWith("Sending message", true) ||
             text.startsWith("Sending file", true)) return null
         if (!missedCall && isNonConversationalEvent(text)) return null
-        return WhatsAppInbound(cleanConversationTitle(sender), text, cleanConversationTitle(conversation), inferredGroup, missedCall, latestMessage?.getLong("time", 0L) ?: 0L)
+        return WhatsAppInbound(cleanConversationTitle(sender), text, cleanConversationTitle(conversation), inferredGroup, missedCall, latestMessage?.getLong("time", 0L) ?: 0L, senderPhone = if (android.os.Build.VERSION.SDK_INT >= 28)
+            (latestMessage?.getParcelable("sender_person") as? android.app.Person)?.uri?.takeIf { it.startsWith("tel:") }?.removePrefix("tel:").orEmpty() else "")
     }
 
     /** WhatsApp also emits status engagement, reaction, and media-placeholder

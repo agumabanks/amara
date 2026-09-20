@@ -94,10 +94,11 @@ class ContactDirectoryStore(context: Context) : SQLiteOpenHelper(context, DATABA
             .also { recomputeNameAmbiguityLocked(it.displayName) }
     }
 
-    /** Union merge: newest display fields win; permissions and aliases only ever widen. */
+    /** Refresh display data and aliases without undoing explicit owner restrictions. */
     private fun merge(existing: DirectoryEntry, incoming: DirectoryEntry): DirectoryEntry {
         val mergedPermissions = Operation.entries.associateWith { op ->
             when {
+                incoming.permissions[op] == Permission.DENY || existing.permissions[op] == Permission.DENY -> Permission.DENY
                 incoming.permissions[op] == Permission.ALLOW || existing.permissions[op] == Permission.ALLOW -> Permission.ALLOW
                 else -> existing.permissions[op] ?: Permission.NONE
             }
@@ -200,7 +201,10 @@ class ContactDirectoryStore(context: Context) : SQLiteOpenHelper(context, DATABA
     @Synchronized
     fun lazyMigrateFromLegacy(config: SecureConfig) {
         val done = readableDatabase.rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(META_KEY)).use { it.moveToFirst() }
-        if (done) return
+        if (done) {
+            restoreScrubbedGroupNames(config.whatsAppGroupsJson)
+            return
+        }
         writableDatabase.beginTransactionNonExclusive()
         try {
             importLegacyContactPermissions(config.contactPermissionsJson)
@@ -214,6 +218,27 @@ class ContactDirectoryStore(context: Context) : SQLiteOpenHelper(context, DATABA
         } finally {
             writableDatabase.endTransaction()
         }
+    }
+
+    /** Restore only an exact fingerprint of an original owner-configured group name.
+     * Preserve its row, permissions and revocations. Never expand a truncated name.
+     */
+    @Synchronized internal fun restoreScrubbedGroupNames(raw: String): Int {
+        val array = runCatching { org.json.JSONArray(raw) }.getOrNull() ?: return 0
+        val originals = (0 until array.length()).map { array.optString(it).trim() }
+            .filter { it.isNotBlank() && !it.contains("[REDACTED:") && Redactor.redactCredentialShapes(it) == it }
+            .distinct().groupBy(Redactor::redact)
+        var restored = 0
+        val rows = readableDatabase.query("contacts", COLUMNS, "is_group = 1", null, null, null, null).use(::allRows)
+        for (entry in rows) {
+            if (!entry.displayName.contains("[REDACTED:")) continue
+            val original = originals[entry.displayName]?.singleOrNull() ?: continue
+            if (rows.any { it.id != entry.id && it.displayName.equals(original, true) }) continue
+            persistLocked(entry.copy(displayName = original), System.currentTimeMillis())
+            recomputeNameAmbiguityLocked(original)
+            restored++
+        }
+        return restored
     }
 
     /**

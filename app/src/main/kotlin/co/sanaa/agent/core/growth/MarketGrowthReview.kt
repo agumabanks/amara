@@ -10,10 +10,11 @@ import org.json.JSONObject
 /** Makes research reviewable against our own catalogue. Competitor claims never become our stock. */
 class MarketGrowthReview(private val memory: AmaraMemory, private val market: MarketAnalyzer, private val store: GrowthStore) {
     fun review(offerings: List<SokoListing>): JSONObject {
+        market.recordReview(offerings)
         val decisions = JSONArray()
         var drafts = 0
         for (item in offerings) {
-            val issues = mutableListOf<String>()
+            val issues = co.sanaa.agent.modules.ServiceListingChecklist.missing(item).toMutableList()
             if (item.imageUrl.isNullOrBlank()) issues += "Supply an original photo of this offering"
             if (item.priceUgx <= 0) issues += "Confirm price and unit with the business"
             if (item.stock == 0) issues += "Confirm restock before promoting this product"
@@ -57,6 +58,9 @@ class MarketGrowthReview(private val memory: AmaraMemory, private val market: Ma
     }
     companion object {
         fun plainText(value: String): String = value.replace(Regex("<[^>]+>"), " ")
-            .replace("&nbsp;", " ").replace("&amp;", "&").replace(Regex("\\s+"), " ").trim()
+            .replace("&nbsp;", " ").replace("&amp;", "&")
+            .replace("&#039;", "'").replace("&#39;", "'").replace("&apos;", "'")
+            .replace("&quot;", "\"").replace("&#34;", "\"")
+            .replace(Regex("\\s+"), " ").trim()
     }
 }

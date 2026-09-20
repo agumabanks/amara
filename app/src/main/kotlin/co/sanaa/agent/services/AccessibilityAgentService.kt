@@ -18,6 +18,7 @@ open class AccessibilityAgentService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        interrupted = false
         instance = this
         runCatching {
             serviceInfo = serviceInfo?.apply {
@@ -44,6 +45,12 @@ open class AccessibilityAgentService : AccessibilityService() {
         event ?: return
         try {
             DeviceActivityMonitor.observe(event.eventType, eventUptimeMillis = event.eventTime)
+            if (event.packageName?.toString() == "com.zhiliaoapp.musically" &&
+                event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
+                val text = event.text.joinToString("\n")
+                co.sanaa.agent.modules.TikTokStoryConfirmation.observe(event.packageName.toString(),text,System.currentTimeMillis())
+                android.util.Log.i("SanaaTikTokNotice",text.take(180))
+            }
             if (event.packageName?.toString() != "com.whatsapp" || event.eventType != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) return
             val text = event.text.joinToString(" ").trim()
             if (text.isBlank()) return
@@ -61,7 +68,10 @@ open class AccessibilityAgentService : AccessibilityService() {
         }
     }
 
-    override fun onInterrupt() = Unit
+    override fun onInterrupt() {
+        interrupted = true
+        android.util.Log.w("SanaaA11y", "Accessibility service interrupted; screen work is blocked until events resume")
+    }
 
     override fun onDestroy() {
         if (instance === this) instance = null
@@ -74,7 +84,10 @@ open class AccessibilityAgentService : AccessibilityService() {
         var instance: AccessibilityAgentService? = null
             private set
 
-        fun isBound(): Boolean = instance != null
+        @Volatile
+        private var interrupted = false
+
+        fun isBound(): Boolean = instance != null && !interrupted
 
         @androidx.annotation.VisibleForTesting
         internal fun setInstanceForTest(value: AccessibilityAgentService?) {

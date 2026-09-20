@@ -20,7 +20,17 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
             .put("comments",org.json.JSONArray(comments.map(Redactor::redactForExport)))
     }
     private fun root() = AccessibilityAgentService.instance?.rootInActiveWindow?.takeIf { it.packageName?.toString()==PACKAGE }
-    private fun nodes(id: String) = root()?.findAccessibilityNodeInfosByViewId("$PACKAGE:id/$id").orEmpty().filter { it.isVisibleToUser }
+    private fun nodes(id: String): List<AccessibilityNodeInfo> {
+        val r=root() ?: return emptyList()
+        return TikTokSocialControls.ids(id).flatMap { r.findAccessibilityNodeInfosByViewId("$PACKAGE:id/$it") }.filter { it.isVisibleToUser }.distinct()
+    }
+    private fun all(n: AccessibilityNodeInfo): List<AccessibilityNodeInfo> = listOf(n)+(0 until n.childCount).flatMap { n.getChild(it)?.let(::all).orEmpty() }
+    private fun visible()=root()?.let(::all).orEmpty().filter { it.isVisibleToUser }
+    private fun label(n: AccessibilityNodeInfo)=n.text?.toString().orEmpty().ifBlank { n.contentDescription?.toString().orEmpty() }.trim()
+    private fun tapLabel(wanted: String): Boolean {
+        val candidates=visible().filter { label(it).equals(wanted,true) && !Rect().also(it::getBoundsInScreen).isEmpty }
+        return candidates.firstOrNull()?.let(::tap) ?: false
+    }
     private fun text(id: String) = nodes(id).map { it.text?.toString().orEmpty().trim() }.filter(String::isNotBlank).distinct()
     private fun tap(node: AccessibilityNodeInfo): Boolean {
         if(node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
@@ -29,24 +39,66 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
     }
     suspend fun profile(): JSONObject? {
         if(!actions.openTikTok() || actions.waitForForegroundPackage(PACKAGE)==null) return null
-        repeat(3) { if(nodes("oeg").isEmpty()) { actions.globalBack();delay(400) } }
-        if(!actions.clickExactLabel("Profile")) return null
-        delay(1200)
-        val handle=text("swb").singleOrNull()?.takeIf { it.startsWith("@") } ?: return null
-        val result=JSONObject().put("handle",handle).put("display_name",text("su7").firstOrNull().orEmpty())
-        for(label in nodes("suu")) {
-            val name=label.text?.toString()?.lowercase() ?: continue
-            if(name !in setOf("following","followers","likes")) continue
-            val amount=label.parent?.findAccessibilityNodeInfosByViewId("$PACKAGE:id/suv")?.singleOrNull()?.text?.toString()
-            amount?.let(TikTokSocialPolicy::parseCount)?.let { result.put(name,it) }
+        // Navigate by the visible tab; do not use an obfuscated ID to decide to press Back.
+        for(attempt in 0 until 12) {
+            if (co.sanaa.agent.core.social.TikTokProfileIdentity.handle(visible().map(::label)) != null) break
+            val tab = visible().firstOrNull { label(it).equals("Profile", true) && !Rect().also(it::getBoundsInScreen).isEmpty }
+            if (tab != null) {
+                val bounds = Rect().also(tab::getBoundsInScreen)
+                val window = root()?.let { Rect().also(it::getBoundsInScreen) }
+                if (!bounds.isEmpty && window?.contains(bounds) == true &&
+                    actions.tapByPosition(bounds.centerX(), bounds.centerY())) break
+            }
+            if (root() == null) {
+                if (actions.snapshot().packageName.isNotBlank()) return null
+                delay(400)
+                continue
+            }
+            actions.globalBack();delay(400)
+        }
+        var profileNodes=emptyList<AccessibilityNodeInfo>()
+        var handle: String? = null
+        var display: String? = null
+        for(wait in 0 until 40) {
+            profileNodes=visible()
+            handle=co.sanaa.agent.core.social.TikTokProfileIdentity.handle(profileNodes.map(::label))
+            display=profileNodes.filter { it.viewIdResourceName in setOf("$PACKAGE:id/t0u","$PACKAGE:id/su7") }
+                .map(::label).filter(String::isNotBlank).distinct().singleOrNull()
+            if(handle != null) break
+            // A dispatched gesture is not proof that navigation completed. Retry the
+            // observed tab twice while waiting, without leaving the TikTok surface.
+            if (wait in setOf(10, 25)) {
+                val tab = visible().firstOrNull { label(it).equals("Profile", true) && !Rect().also(it::getBoundsInScreen).isEmpty }
+                val bounds = tab?.let { Rect().also(it::getBoundsInScreen) }
+                val window = root()?.let { Rect().also(it::getBoundsInScreen) }
+                if (bounds != null && window?.contains(bounds) == true)
+                    actions.tapByPosition(bounds.centerX(), bounds.centerY())
+            }
+            delay(400)
+        }
+        if(handle == null) {
+            android.util.Log.w("SanaaAgentSocial", "Own profile incomplete: nodes=${profileNodes.size} edit=${profileNodes.any { label(it) in setOf("Edit","Edit profile") }} handle=${handle != null} display=${display != null}")
+            return null
+        }
+        val result=JSONObject().put("handle",handle).put("display_name",display ?: handle.removePrefix("@"))
+        for(stat in profileNodes.filter { label(it).lowercase() in setOf("following","followers","likes") }) {
+            val values=stat.parent?.let(::all).orEmpty().map(::label).mapNotNull(TikTokSocialPolicy::parseCount).distinct()
+            values.singleOrNull()?.let { result.put(label(stat).lowercase(),it) }
         }
         return result
     }
     suspend fun home(): Boolean {
         if(!actions.openTikTok() || actions.waitForForegroundPackage(PACKAGE)==null) return false
-        repeat(4) { if(text("desc").isEmpty()) { if(!actions.clickExactLabel("Home")) actions.globalBack();delay(400) } }
-        actions.clickExactLabel("For You");delay(700)
-        return root()!=null
+        for(attempt in 0 until 6) {
+            if(text("desc").isNotEmpty() && nodes("user_avatar").isNotEmpty()) return true
+            val tab=visible().firstOrNull { label(it).equals("Home",true) && !Rect().also(it::getBoundsInScreen).isEmpty }
+            if(tab != null) {
+                val bounds=Rect().also(tab::getBoundsInScreen)
+                actions.tapByPosition(bounds.centerX(),bounds.centerY())
+            } else actions.globalBack()
+            delay(800)
+        }
+        return text("desc").isNotEmpty() && nodes("user_avatar").isNotEmpty()
     }
     suspend fun search(query: String): Boolean {
         if(query.isBlank() || query.length>80 || !home()) return false
@@ -100,10 +152,7 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
         if(root()==null) return false
         if(nodes("ywb").isNotEmpty()) { tap(nodes("ywb").first());delay(400) }
         if(root()==null || text("desc").isEmpty()) return false
-        val window=Rect().also(root()!!::getBoundsInScreen)
-        val path=Path().apply { moveTo(window.width()*0.45f,window.height()*0.72f);lineTo(window.width()*0.45f,window.height()*0.28f) }
-        val ok=AccessibilityAgentService.instance?.dispatchGesture(GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path,0,450)).build(),null,null)==true
-        delay(900);return ok
+        return actions.swipeUpAndConfirm(PACKAGE)
     }
     @RequiresTransaction(reason = "public TikTok comment")
     suspend fun comment(post: Post, response: String): Boolean {
@@ -135,8 +184,8 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
                     val container=row
                     if(container!=null) {
                         val authors=container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/title").map { it.text?.toString().orEmpty() }.distinct()
-                        val texts=container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/f15").map { it.text?.toString().orEmpty() }.distinct()
-                        val statuses=container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/ekn").map { it.text?.toString().orEmpty() }
+                        val texts=TikTokSocialControls.ids("f15").flatMap { container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/$it") }.map { it.text?.toString().orEmpty() }.distinct()
+                        val statuses=TikTokSocialControls.ids("ekn").flatMap { container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/$it") }.map { it.text?.toString().orEmpty() }
                         if(authors.size==1 && authors.single()==ownName && texts.size==1 && statuses.isNotEmpty() &&
                             statuses.none { it.contains("sending",true) || it.contains("failed",true) })
                             return VerificationEvidence(true,0.9,PACKAGE,"comment_visible",System.currentTimeMillis())

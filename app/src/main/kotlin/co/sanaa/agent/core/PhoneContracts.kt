@@ -206,7 +206,7 @@ private fun internalCommunicationSpec(
 ): CapabilitySpec = CapabilitySpec(
     id = id, label = label, description = description,
     risk = ActionRisk.EXTERNAL_COMMUNICATION,
-    inputSchema = "{target:nonblank!, content:string!}",
+    inputSchema = if (id == CapabilityIds.NOTIFY_OWNER_WHATSAPP) "{target:nonblank!, content:string!, manager_report:boolean!}" else "{target:nonblank!, content:string!}",
     outputSchema = "{verified:boolean, deliveryState:string?, evidenceTimestamp:long}",
     requiredPermissions = setOf("accessibility_bound"),
     allowedInitiators = if (workflowAuthorized) setOf(Initiator.INTERNAL_RUNTIME, Initiator.AUTHORIZED_WORKFLOW)
@@ -455,6 +455,12 @@ object CapabilityCatalog {
             recurringAllowed = true,
         ),
         communicationSpec(
+            CapabilityIds.POST_YOUTUBE_SHORT, "Publish YouTube Short",
+            "Cross-post a verified TikTok ad to the configured YouTube channel",
+            VerifierKind.PUBLICATION_STATE, IdempotencyStrategy.CONTENT_HASH_KEY,
+            setOf("com.google.android.youtube"), null, recurringAllowed = true,
+        ).copy(timeoutMs = 360_000),
+        communicationSpec(
             "post_tiktok", "Post TikTok",
             "create a TikTok draft or publish (only when the owner explicitly asks)",
             VerifierKind.PUBLICATION_STATE, IdempotencyStrategy.CONTENT_HASH_KEY,
@@ -462,7 +468,14 @@ object CapabilityCatalog {
             "- post_tiktok (only when the owner explicitly asks to publish a TikTok)",
             workflowAuthorized = true,
             recurringAllowed = true,
-        ),
+        ).copy(timeoutMs = 360_000), // Up to 180s preparation plus 180s progress-bounded verification.
+        communicationSpec(
+            CapabilityIds.POST_TIKTOK_STORY, "Post TikTok Story",
+            "share an exact verified Soko ad to the owner's TikTok Story",
+            VerifierKind.PUBLICATION_STATE, IdempotencyStrategy.CONTENT_HASH_KEY,
+            setOf("com.zhiliaoapp.musically"), null,
+            workflowAuthorized = true, recurringAllowed = true,
+        ).copy(timeoutMs = 240_000), // 180s preparation plus 45s Story confirmation.
         internalCommunicationSpec(
             CapabilityIds.TIKTOK_PUBLIC_COMMENT, "Contextual TikTok comment",
             "Owner-enabled, rate-limited contextual comment on an exact observed public post.",

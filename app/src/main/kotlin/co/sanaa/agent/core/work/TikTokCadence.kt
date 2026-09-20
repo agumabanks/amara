@@ -20,9 +20,28 @@ class TikTokCadence(context: Context) {
     fun finishOpportunity(key: String, intervalMinutes: Long, now: Long = System.currentTimeMillis(), verified: Boolean = true) {
         val due = prefs.getLong("due", 0)
         if (key != "tiktok-due-$due") return
+        val interval = randomDelayMillis(intervalMinutes)
+        // Keep the selected wall-clock cadence. Skip missed slots instead of
+        // adding render/upload time to every interval or bursting after a pause.
+        val next = if (verified) due + ((now - due).coerceAtLeast(0) / interval + 1) * interval
+            else now + 5 * 60_000L
         check(prefs.edit().putLong("interval", intervalMinutes)
-            .putLong("due", now + if (verified) randomDelayMillis(intervalMinutes) else 5 * 60_000L)
+            .putLong("due", next)
             .putBoolean("last_verified", verified).commit())
+    }
+
+    /**
+     * An owner-closed scheduled item is a deliberate no-send decision, not a
+     * permanent cancellation of the cadence.  Move past exactly that durable
+     * opportunity so its queue tombstone cannot dedupe every later schedule.
+     */
+    @Synchronized
+    fun skipOwnerClosedOpportunity(key: String, intervalMinutes: Long, now: Long = System.currentTimeMillis()) {
+        val due = prefs.getLong("due", 0)
+        if (key != "tiktok-due-$due") return
+        check(prefs.edit().putLong("interval", intervalMinutes)
+            .putLong("due", now + randomDelayMillis(intervalMinutes))
+            .putBoolean("last_verified", false).commit())
     }
 
     companion object {

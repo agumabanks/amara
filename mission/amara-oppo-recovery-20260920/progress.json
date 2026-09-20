@@ -1,0 +1,96 @@
+{
+  "updated": "2026-09-20",
+  "target_release": "0.10.26 (39)",
+  "items": [
+    {
+      "id": "sound",
+      "status": "verified",
+      "evidence": "artifacts/sound-shorts-20260920/tiktok35-outcome.jsonl",
+      "next": "Final-build attached track and VERIFIED post observed; continue monitoring interruptions"
+    },
+    {
+      "id": "public_contact",
+      "status": "verified",
+      "evidence": "artifacts/sound-shorts-20260920/tiktok35-progress.png",
+      "next": "Public WhatsApp visibly restored on final-release published video"
+    },
+    {
+      "id": "cadence",
+      "status": "tested",
+      "evidence": "artifacts/tiktok-health-20260920/oppo-recent39.jsonl",
+      "next": "Two natural starts 618.496s apart, both VERIFIED; exact slot-grid deadline evidence still required."
+    },
+    {
+      "id": "shorts_identity",
+      "status": "verified",
+      "evidence": "artifacts/tiktok-health-20260920/oppo-prep-result39.jsonl",
+      "next": "Release39 preparation passed with exact details and editor cleanup; actual publication remains pending."
+    },
+    {
+      "id": "shorts_publication",
+      "status": "pending",
+      "evidence": "artifacts/continuation39-oppo/latest.jsonl",
+      "next": "20 held and 1 pending preserved. OPPO observed Off; awaiting owner clarification before resuming. No exact-source YouTube publication established."
+    },
+    {
+      "id": "accessibility_prompt",
+      "status": "installed",
+      "evidence": "app/src/main/kotlin/co/sanaa/agent/MainActivity.kt",
+      "next": "Off and connected On paths observed; disconnected recovery awaits a natural outage"
+    },
+    {
+      "id": "release35",
+      "status": "verified",
+      "evidence": "artifacts/sound-shorts-20260920/certificate35.json",
+      "next": "Installed checksum matched; all service certificate checks passed"
+    },
+    {
+      "id": "cleanup",
+      "status": "verified",
+      "evidence": "artifacts/sound-shorts-20260920/cleanup-result35.png",
+      "next": "One obsolete file removed; 0.7 MiB reclaimed; quiet-hours maintenance remains scheduled"
+    },
+    {
+      "id": "mission_records",
+      "status": "verified",
+      "evidence": "mission/amara-oppo-recovery-20260920/HANDOFF.md",
+      "next": "Keep evidence current"
+    },
+    {
+      "id": "tps_deployment",
+      "status": "verified",
+      "evidence": "artifacts/tiktok-health-20260920/tps-certificate39.txt",
+      "next": "Release39 installed and certified; prior release38 feed verified. Community and Story limitations remain."
+    },
+    {
+      "id": "release37",
+      "status": "installed",
+      "evidence": "artifacts/posting-recovery-20260920/release37-tests.json",
+      "next": "Both phones replacement-installed with matching bytes; complete device-specific live checks"
+    },
+    {
+      "id": "tiktok_community38",
+      "status": "installed",
+      "evidence": "artifacts/tiktok-health-20260920/tests38.json",
+      "next": "OPPO read two posts; TPS zero-read correctly fails but caption compatibility remains unresolved."
+    },
+    {
+      "id": "tiktok_import38",
+      "status": "installed",
+      "evidence": "artifacts/tiktok-health-20260920/tests38.json",
+      "next": "Both OPPO and TPS have release38 feed VERIFIED outcomes; additional OPPO cycles observed."
+    },
+    {
+      "id": "release38",
+      "status": "installed",
+      "evidence": "artifacts/tiktok-health-20260920/oppo-certificate38.txt",
+      "next": "Both installed hashes matched; verified feed posts on both; release39 candidate tested."
+    },
+    {
+      "id": "release39",
+      "status": "installed",
+      "evidence": "artifacts/tiktok-health-20260920/oppo-certificate39.txt",
+      "next": "Both phones installed with matching ce4453cf\u2026 bytes and healthy service certificates; live Shorts acceptance pending."
+    }
+  ]
+}

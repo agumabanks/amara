@@ -17,4 +17,10 @@ class EvaluationTest(unittest.TestCase):
         r=summarize([{'event':'external_effect','key':'x','fields':{'status':'ACTING','capability':'tiktok'}}],10,20)
         self.assertEqual(r['unresolved_external_effects'],1)
         self.assertTrue(r['evaluation_complete'])
+    def test_gaps_and_build_changes_remain_visible(self):
+        rows=[{'at':1000,'build_segment':'v6'}, {'at':601000,'build_segment':'v7'}]
+        result=summarize(rows,900000,700000)
+        self.assertEqual(result['largest_phone_event_gap_seconds'],600)
+        self.assertEqual(result['build_segments'],{'v6':1,'v7':1})
+        self.assertFalse(result['evaluation_complete'])
 if __name__=='__main__':unittest.main()

@@ -35,7 +35,10 @@ class AutonomousBypassStructureTest {
         assertFalse(scheduledBody.contains("CommandExecutor("))
         val healthBody = agentWorkers.substringAfter("class HealthWorker").substringBefore("class ReadOnlyShopAuditWorker")
         assertTrue(healthBody.contains("workLoop.wake"))
-        assertFalse(healthBody.contains("health.run()"))
+        // Health must inspect a stalled/offline loop independently. External
+        // manager delivery stays queued through the runtime callback.
+        assertTrue(healthBody.contains("health.run()"))
+        assertFalse(healthBody.contains("sendToWhatsApp"))
     }
 
     @Test fun jijiIsVisibleAndHasAnExplicitPackageMapping() {
@@ -104,7 +107,8 @@ class AutonomousBypassStructureTest {
         val ui = File(root, "flutter_ui/lib/screens/settings/settings_screen.dart").readText()
         listOf("whatsAppEnabled", "whatsAppInboundEnabled", "whatsAppFollowUpsEnabled", "whatsAppGroupsEnabled", "whatsAppAlwaysOn", "memoryBackupEnabled", "tikTokAlwaysOn")
             .forEach { assertTrue("missing $it", settings.contains("\"$it\"")) }
-        assertTrue(ui.contains("Master autopilot"))
+        assertTrue(ui.contains("AMARA POWER"))
+        assertTrue(ui.contains("'Amara is on'"))
         assertTrue(ui.contains("Contact control"))
         assertTrue(ui.contains("Back up now"))
     }

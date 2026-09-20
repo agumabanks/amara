@@ -233,9 +233,21 @@ class WorkflowProductionRouterTest {
         seedKnowledge("listing-price-fix price stale")
         surface.foregroundPackage = co.sanaa.agent.actions.SokoSaveVerification.SOKO_PACKAGE
         surface.stageSokoField("product name", "Fresh Mango Box")
-        // The draft content becomes the applied value via setFirstEditableField.
+        // The approved value is applied through its named field.
         runToCompletion(workflow, "cert-edit-1", mapOf("listing_id" to "Mango Box", "product_id" to "listing-price-fix", "target" to "Mango Box", "field" to "product name", "value" to "Fresh Mango Box"), now)
         assertTrue(memory.allSideEffectTransactions().any { it.capability == "apply_soko_edit" && it.state == SideEffectState.VERIFIED })
+    }
+
+    @Test fun approvedPriceEditDoesNotOverwriteProductName() {
+        val workflow=WorkflowRegistry.byId("catalog_health")!!
+        val now=System.currentTimeMillis()
+        seedKnowledge("listing-price-only price stale")
+        surface.foregroundPackage=co.sanaa.agent.actions.SokoSaveVerification.SOKO_PACKAGE
+        surface.stageSokoField("product name","Mango Box")
+        runToCompletion(workflow,"cert-price-only",mapOf("listing_id" to "Mango Box","product_id" to "listing-price-only",
+            "target" to "Mango Box","field" to "selling price","value" to "45000"),now)
+        assertTrue(surface.verifyEditFormFields(mapOf("product name" to "Mango Box","selling price" to "45000")))
+        assertTrue(memory.allSideEffectTransactions().any { it.capability=="apply_soko_edit" && it.state==SideEffectState.VERIFIED })
     }
 
     // ---------- approval binding exactness ----------

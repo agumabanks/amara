@@ -21,3 +21,7 @@ Implementation references are locations for inspection, not assertions that all 
 - `flutter_ui/lib/screens/settings/whatsapp_groups_screen.dart`
 
 For each new proposal, record hypothesis, target audience, expected benefit, owner authority needed, bounded implementation, measurement and stop/revert condition. Do not change commercial promises merely because a competitor lists a different price.
+
+## 9 September implementation map
+
+P3 now has per-group purpose/rules/topic settings and selection/reply enforcement. P5 now has deterministic Amara artwork and a public contact setting. P6 now has a structured service buying checklist. OBS-01 supports week-long bounded journals and gap/build reporting. See [review](../IMPLEMENTATION-20260909.md) for exact scope and outstanding live evidence.

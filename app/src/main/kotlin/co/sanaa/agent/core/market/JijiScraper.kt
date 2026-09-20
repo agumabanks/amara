@@ -38,7 +38,7 @@ class JijiScraper(
      * Check if Jiji is installed.
      */
     fun isInstalled(): Boolean {
-        return actions.packageNameForApp("jiji") != null
+        return actions.isAppInstalled("jiji")
     }
 
     /**
@@ -73,12 +73,17 @@ class JijiScraper(
         }
         if (!openCategoryResults(category)) return 0
 
+        return collectResults(category,maxItems)
+    }
+
+    private suspend fun collectResults(category: String,maxItems: Int): Int {
         val listings = linkedMapOf<String, ScrapedListing>()
         var scrollCount = 0
         val maxScrolls = (maxItems / 5) + 1  // Assume ~5 items per screen
 
         while (scrollCount < maxScrolls && listings.size < maxItems) {
             val screen = actions.snapshot()
+            if(screen.packageName != PACKAGE_JIJI) { failed("results_foreground_lost"); break }
             val visibleItems = parseListingsFromScreen(screen, category)
             visibleItems.forEach { listings[it.listingKey] = it }
 
@@ -101,16 +106,32 @@ class JijiScraper(
      * Scrape search results for a query.
      */
     suspend fun scrapeSearch(query: String, maxItems: Int = 20): Int {
-        if (!openJiji()) return 0
-
-        // Type search query
-        if (!actions.clickExactLabel("Search", "Search Jiji", "What are you looking for?")) return 0
-        actions.pause(InteractionKind.TYPE_SETTLE)
-        if (!actions.typeAndSendInCurrentChat(query)) return 0
-        actions.pause(InteractionKind.NETWORK_CONTENT)
-
-        return scrapeCategory(query, maxItems)
+        lastFailure=""
+        val term=query.trim()
+        if(term.isBlank() || term.length>120) { failed("search_query_invalid");return 0 }
+        if (!openJiji() || actions.waitForForegroundPackage(PACKAGE_JIJI)==null) { failed("search_foreground");return 0 }
+        repeat(6) {
+            if(actions.snapshot().packageName!=PACKAGE_JIJI) { failed("search_foreground_lost");return 0 }
+            if(actions.clickExactLabel("Search", "Search Jiji", "What are you looking for?") || actions.hasEditableField()) {
+                actions.pause(InteractionKind.TYPE_SETTLE)
+                if(!actions.submitJijiSearch(term)) { failed("search_submit_unavailable");return 0 }
+                repeat(24) {
+                    val result=actions.snapshot()
+                    if(result.packageName!=PACKAGE_JIJI) { failed("search_foreground_lost");return 0 }
+                    if(searchResultsMatch(result,term) && result.visibleText.any(::isPriceLine)) return collectResults(term,maxItems)
+                    kotlinx.coroutines.delay(250)
+                }
+                failed("search_results_unverified");return 0
+            }
+            actions.globalBack();actions.pause(InteractionKind.TAP_SETTLE)
+        }
+        failed("search_control_unavailable");return 0
     }
+
+    internal fun searchResultsMatch(screen: WhatsAppScreenSnapshot,query: String): Boolean =
+        screen.packageName==PACKAGE_JIJI && screen.visibleText.any {
+            it.trim().equals(query.trim(),true) || it.trim().equals("Search: ${query.trim()}",true)
+        }
 
     /**
      * Parse listings from current screen.
@@ -223,8 +244,8 @@ class JijiScraper(
 
             // Update last_seen
             db.execSQL(
-                "UPDATE jiji_listings SET last_seen = ?, price_ugx = ? WHERE id = ?",
-                arrayOf(now.toString(), listing.priceUgx.toString(), id.toString())
+                "UPDATE jiji_listings SET last_seen = ?, price_ugx = ?, scraped_at = ? WHERE id = ?",
+                arrayOf(now, listing.priceUgx, now, id)
             )
 
             // Record price change
@@ -250,14 +271,17 @@ class JijiScraper(
             )
         }
         cursor.close()
+        if(listing.priceUgx != null && listing.priceUgx > 0) db.execSQL(
+            "INSERT INTO price_history(listing_key,price_ugx,recorded_at) SELECT ?,?,? WHERE NOT EXISTS(SELECT 1 FROM price_history WHERE listing_key=? AND recorded_at>=?)",
+            arrayOf(listing.listingKey,listing.priceUgx,now,listing.listingKey,now-24*3_600_000L))
     }
 
     /**
      * Get total listings in database.
      */
     fun getTotalListings(): Int {
-        val cursor = db.readableDatabase.rawQuery("SELECT COUNT(*) FROM jiji_listings", null)
-        return if (cursor.moveToFirst()) cursor.getInt(0) else 0.also { cursor.close() }
+        return db.readableDatabase.rawQuery("SELECT COUNT(*) FROM jiji_listings WHERE source='JIJI'", null)
+            .use { if(it.moveToFirst()) it.getInt(0) else 0 }
     }
 
     /**

@@ -10,6 +10,28 @@ object PublicationSurfaces {
     const val OBSERVATION_WINDOW_MS = 12_000L
 }
 
+/** Retry observation/navigation only: never replay the publish action. */
+internal suspend fun awaitTikTokPublication(
+    observe: () -> VerificationEvidence,
+    openLatest: suspend () -> Boolean,
+    foregroundAllowed: () -> Boolean,
+    timeoutMs: Long = 90_000,
+    pollMs: Long = 3_000,
+    progress: () -> String? = { null },
+): VerificationEvidence = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+    val budget = UiProgressBudget(minOf(45_000L, timeoutMs), timeoutMs)
+    while (true) {
+        kotlinx.coroutines.delay(pollMs)
+        if (!foregroundAllowed()) return@withTimeoutOrNull VerificationEvidence.impossible("TikTok verification yielded after the foreground app changed.")
+        budget.progress(progress())
+        if (budget.expired()) return@withTimeoutOrNull VerificationEvidence.impossible("Upload made no new observable progress; do not repost.")
+        // Never accept matching caption text in the editor or someone else's feed.
+        if (openLatest()) observe().takeIf { it.verified }?.let { return@withTimeoutOrNull it }
+    }
+    @Suppress("UNREACHABLE_CODE")
+    VerificationEvidence.impossible("TikTok publication remains unproven.")
+} ?: VerificationEvidence.impossible("TikTok upload/profile did not expose the exact published caption within the verification window; do not repost.")
+
 /**
  * Pure publication-surface rule: content on any package other than the expected one
  * proves nothing (the predecessor accepted matching text in an arbitrary foreground app).
@@ -224,18 +246,13 @@ class TargetBoundVerifiers(private val actions: AccessibilityActions) {
         // TikTok commonly returns to Home after accepting Post. Text on Home cannot
         // prove our publication, so reopen the signed-in profile's newest grid item
         // and bind verification to the exact caption on that post.
-        kotlinx.coroutines.delay(3_000)
-        evaluatePublication(actions.snapshot(), caption, "TikTok post", PublicationSurfaces.TIKTOK_PACKAGE)
-            .takeIf { it.verified }?.let { return it }
-        if (!actions.openLatestTikTokPost()) {
-            return VerificationEvidence.impossible(
-                "TikTok accepted the publish tap, but the newest profile post could not be opened for caption verification.",
-                actions.snapshot().packageName,
-            )
-        }
-        return pollPublication(
-            caption, "newest TikTok profile post", PublicationSurfaces.TIKTOK_PACKAGE,
-        ) { evaluatePublication(actions.snapshot(), caption, "newest TikTok profile post", PublicationSurfaces.TIKTOK_PACKAGE) }
+        return awaitTikTokPublication(
+            observe = { actions.observeTikTokPublishedCaption(caption) },
+            openLatest = { actions.openLatestTikTokPost() },
+            timeoutMs = 180_000,
+            progress = { actions.snapshot().visibleText.firstOrNull { it.contains(Regex("\\b\\d{1,3}%")) } },
+            foregroundAllowed = { actions.snapshot().packageName.let { it.isBlank() || it == PublicationSurfaces.TIKTOK_PACKAGE } },
+        )
     }
 
     suspend fun evaluateCurrentChat(target: String, content: String, preState: ChatPreState? = null): VerificationEvidence {

@@ -20,9 +20,10 @@ import org.json.JSONObject
  * 
  * Stored in amara_learning.db
  */
-class LearningDatabase(context: Context) : SQLiteOpenHelper(context, "amara_learning.db", null, 1) {
+class LearningDatabase(context: Context) : SQLiteOpenHelper(context, "amara_learning.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
+        createDecisions(db)
         // Every action Amara takes
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS action_log (
@@ -104,7 +105,8 @@ class LearningDatabase(context: Context) : SQLiteOpenHelper(context, "amara_lear
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_skill_name ON skill_performance(skill_name)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    private fun createDecisions(db: SQLiteDatabase) { db.execSQL("CREATE TABLE IF NOT EXISTS adaptation_decisions(work_key TEXT PRIMARY KEY,action_type TEXT,hour INTEGER,factor REAL,evidence_count INTEGER,applied_at INTEGER,outcome TEXT,outcome_at INTEGER)") }
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { if(oldVersion<2) createDecisions(db) }
 }
 
 /**
@@ -144,6 +146,21 @@ class LearningLoop(
             ?: return 1.0
         if (pattern.evidenceCount < 3) return 1.0
         return (0.75 + pattern.confidence * 0.5).coerceIn(0.75, 1.25)
+    }
+
+    fun appliedDecision(workKey: String, actionType: String, hour: Int) {
+        val pattern=getPatterns("TIMING_V2",0.35).firstOrNull { it.key=="${actionType}@${hour}" && it.evidenceCount>=3 } ?: return
+        val factor=scoreFactor(actionType,hour)
+        val values=android.content.ContentValues().apply {
+            put("work_key",workKey);put("action_type",actionType);put("hour",hour);put("factor",factor)
+            put("evidence_count",pattern.evidenceCount);put("applied_at",System.currentTimeMillis())
+        }
+        if(db.writableDatabase.insertWithOnConflict("adaptation_decisions",null,values,SQLiteDatabase.CONFLICT_IGNORE)!=-1L)
+            db.writableDatabase.execSQL("UPDATE learned_patterns SET applied_count=applied_count+1 WHERE pattern_type='TIMING_V2' AND pattern_key=?",arrayOf(pattern.key))
+    }
+    fun decisionOutcome(workKey: String, outcome: String) {
+        db.writableDatabase.execSQL("UPDATE adaptation_decisions SET outcome=?,outcome_at=? WHERE work_key=?",
+            arrayOf(outcome,System.currentTimeMillis(),workKey))
     }
 
     fun exportMemory(): JSONObject {
@@ -232,7 +249,11 @@ class LearningLoop(
             "screenSeconds" to totalCursor.getInt(2),
         ) else mapOf("attempts" to 0, "successes" to 0, "screenSeconds" to 0)
         totalCursor.close()
-        return mapOf("totals" to totals, "recent" to recent, "errors" to errorHistory(), "patterns" to getTopPatterns(5).map {
+        val adaptations=mutableListOf<Map<String,Any>>()
+        db.readableDatabase.rawQuery("SELECT action_type,factor,evidence_count,applied_at,outcome FROM adaptation_decisions ORDER BY applied_at DESC LIMIT 10",null).use { c ->
+            while(c.moveToNext()) adaptations.add(mapOf("action" to c.getString(0),"factor" to c.getDouble(1),"evidenceCount" to c.getInt(2),"appliedAt" to c.getLong(3),"outcome" to c.getString(4).orEmpty()))
+        }
+        return mapOf("adaptations" to adaptations,"totals" to totals, "recent" to recent, "errors" to errorHistory(), "patterns" to getTopPatterns(5).map {
             mapOf("type" to it.type, "value" to it.value, "confidence" to it.confidence, "evidenceCount" to it.evidenceCount)
         })
     }

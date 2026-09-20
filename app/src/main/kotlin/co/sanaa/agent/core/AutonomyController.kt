@@ -23,10 +23,11 @@ class AutonomyController(private val context: Context) {
     private val runtime = AgentRuntime.get(context)
     private val state = runtime.state
 
-    suspend fun execute(command: String, selectedContact: String, selectedPhone: String): CommandResult {
+    suspend fun execute(command: String, selectedContact: String, selectedPhone: String, deviceLeaseHeld: Boolean = false): CommandResult {
+        if (!OwnerPower(context).isOn()) return CommandResult(false, "needs_owner", "Amara is off. Turn me on in Settings to resume work.")
         RuntimeStatusBus.clear(RUNTIME_WORKER_ID)
         return try {
-            val result = executeInternal(command, selectedContact, selectedPhone)
+            val result = executeInternal(command, selectedContact, selectedPhone, deviceLeaseHeld)
             runtime.learningLoop.recordAction(
                 "OWNER_COMMAND", "OWNER", result.success,
                 details = "Command outcome: ${result.status}",
@@ -54,7 +55,7 @@ class AutonomyController(private val context: Context) {
         }
     }
 
-    private suspend fun executeInternal(command: String, selectedContact: String, selectedPhone: String): CommandResult {
+    private suspend fun executeInternal(command: String, selectedContact: String, selectedPhone: String, deviceLeaseHeld: Boolean): CommandResult {
         // Credential ingress guard: BEFORE any persistence or model call. Durable
         // records (instruction, task journal, owner chat, action rows, receipts) and
         // model prompts receive only the redacted placeholder; the raw credential
@@ -97,7 +98,7 @@ class AutonomyController(private val context: Context) {
                     // Approve-and-execute: the just-approved record is consumed inside one
                     // atomic side-effect transaction (approval → claim → act → verify → finalize).
                     val after = JSONObject(selected.afterJson)
-                    val fieldName = after.keys().asSequence().firstOrNull() ?: ""
+                    val fieldName = after.keys().asSequence().firstOrNull { it!="shop_scope" } ?: ""
                     val newValue = after.optString(fieldName)
                     if (fieldName.isBlank()) {
                         answer = "Approved, but the stored change has no editable field to apply, so nothing was changed."
@@ -175,6 +176,24 @@ class AutonomyController(private val context: Context) {
             runtime.memory.recordAmaraChat(answer)
             progress("idle", "Recurring task scheduled")
             return CommandResult(true, "scheduled", answer, "Recognized a recurring owner instruction.", "Stored a durable schedule with duplicate-occurrence protection.")
+        }
+
+        if (safeCommand.trim().lowercase().trimEnd('?', '.', '!') in setOf(
+                "device status", "amara status", "are you working", "why are you not working",
+                "why aren't you working", "what is blocking you", "check your health", "queue status")) {
+            val health = runtime.health.snapshot()
+            val blockers = (health["blockers"] as? List<*>)?.joinToString("; ").orEmpty()
+            val loop = runtime.workLoop.diagnostics()
+            val answer = buildString {
+                append(if (blockers.isBlank()) "I have no detected device blockers. " else "I need attention: $blockers. ")
+                append("Battery: ${health["batteryPercent"]}%. Internet: ${health["network"]}. ")
+                append("${runtime.workQueue.allPending().size} items are waiting. ${loop["lastSummary"]}. ")
+                append("Queued work is not proof of delivery. Open group schedules for each group's last outcome and recovery hold.")
+            }
+            runtime.memory.updateInstruction(instructionId, "done")
+            runtime.memory.updateTaskJournal(taskId, "completed", "report", answer)
+            runtime.memory.recordAmaraChat(answer)
+            return CommandResult(true, "answered", answer, "Read current local health and queue state.", "No model or phone action required.")
         }
 
         if (isLastActionQuestion(command)) {
@@ -306,14 +325,15 @@ class AutonomyController(private val context: Context) {
         var terminalFailure = false
         while (pending.isNotEmpty() && actionIndex < MAX_TOTAL_ACTIONS) {
             val step = pending.removeFirst()
-            if (state.bool(CANCEL_KEY)) {
+            if (state.bool(CANCEL_KEY) || !OwnerPower(context).isOn()) {
                 outcomes += StepOutcome(step, false, "Stopped at the owner’s request before this step.")
                 break
             }
             progress("act", "${actionIndex + 1} — ${step.reason.ifBlank { humanAction(step.action) }}")
             runtime.memory.updateTaskJournal(taskId, "running", "act", replanCount = replanCount)
             val before = runtime.actions.snapshot()
-            val outcome = runtime.queue.withExclusiveDeviceAction { executeStep(step, selectedContact, selectedPhone, safeCommand, keyScope = "task-$taskId") }
+            val outcome = if (deviceLeaseHeld) executeStep(step, selectedContact, selectedPhone, safeCommand, keyScope = "task-$taskId")
+                else runtime.queue.withExclusiveDeviceAction { executeStep(step, selectedContact, selectedPhone, safeCommand, keyScope = "task-$taskId") }
             val after = runtime.actions.snapshot()
             outcomes += outcome
             actionIndex++
@@ -653,13 +673,13 @@ class AutonomyController(private val context: Context) {
                 verify = { runtime.targetVerifiers.verifyWhatsAppStatus(step.message) },
             )
             "post_tiktok" -> {
-                val products = runtime.soko.activeListings()
+                val products = runtime.soko.promotableOfferings()
                 val requested = step.target.trim()
                 val product = if (requested.isBlank() || requested.equals("tiktok", true)) {
                     co.sanaa.agent.core.work.WorkExecutor.selectTikTokListing(products,
                         runtime.memory.recentTikTokProductTargets(System.currentTimeMillis() - 30L * 86_400_000L))
                 } else products.singleOrNull { it.id == requested || it.title.equals(requested, true) }
-                val content = product?.let { co.sanaa.agent.modules.TikTokProductContent.from(it) }
+                val content = product?.let { co.sanaa.agent.modules.TikTokProductContent.from(it, runtime.config.publicAdWhatsApp, runtime.config.businessName) }
                 if (content == null) {
                     StepOutcome(step, false, "No exact Soko product with a photo and shopping link was resolved. Nothing posted; specify the product title or ID.")
                 } else {
@@ -667,13 +687,14 @@ class AutonomyController(private val context: Context) {
                     val normalizedCommand = ownerCommand.lowercase()
                     val publish = ("publish" in normalizedCommand || Regex("\\bpost\\b").containsMatchIn(normalizedCommand)) &&
                         "draft" !in normalizedCommand
+                    val bindingKey = "$keyScope:tiktok:${content.fingerprint}"
+                    runtime.actions.prepareBoundTikTokAd(content.imageUrl, bindingKey, content.ad)
                     if (!publish) {
-                        val created = runtime.tiktok.createPost(imageUrl = content.imageUrl, caption = caption, publish = false, mediaBindingKey = "$keyScope:tiktok:${content.fingerprint}")
-                        StepOutcome(step, created, if (created) "TikTok accepted the draft action; nothing was published. Saved draft still needs verification." else "Could not create the TikTok draft.")
+                        StepOutcome(step, true, "Prepared the exact ad locally. No TikTok draft or publication was created.")
                     } else {
                         runSideEffect(
                             CapabilityIds.POST_TIKTOK, "tiktok", caption,
-                            act = { runtime.tiktok.createPost(imageUrl = content.imageUrl, caption = caption, publish = true, mediaBindingKey = "$keyScope:tiktok:${content.fingerprint}") },
+                            act = { runtime.actions.transacted { postTikTok(content.imageUrl, caption, true, bindingKey) } },
                             verify = { runtime.targetVerifiers.verifyTikTokPost(caption) },
                         )
                     }

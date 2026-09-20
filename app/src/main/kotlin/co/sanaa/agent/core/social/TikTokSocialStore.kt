@@ -39,8 +39,8 @@ class TikTokSocialStore(context: Context) : SQLiteOpenHelper(context, "amara_tik
         fun count(sql: String, args: Array<String>) = db.rawQuery(sql,args).use { it.moveToFirst(); it.getInt(0) }
         return count("SELECT COUNT(*) FROM observations WHERE post_key=? AND state!='OBSERVED'",arrayOf(key)) == 0 &&
             count("SELECT COUNT(*) FROM observations WHERE creator=? AND reserved_at>?",arrayOf(creator,(now-86400000).toString())) == 0 &&
-            count("SELECT COUNT(*) FROM observations WHERE reserved_at>?",arrayOf((now-86400000).toString())) < 12 &&
-            count("SELECT COUNT(*) FROM observations WHERE reserved_at>?",arrayOf((now-1200000).toString())) == 0
+            count("SELECT COUNT(*) FROM observations WHERE reserved_at>?",arrayOf((now-86400000).toString())) < 48 &&
+            count("SELECT COUNT(*) FROM observations WHERE reserved_at>?",arrayOf((now-45_000).toString())) == 0
     }
     @Synchronized fun reserve(key: String, creator: String, response: String, now: Long = System.currentTimeMillis()): Boolean {
         val db = writableDatabase
