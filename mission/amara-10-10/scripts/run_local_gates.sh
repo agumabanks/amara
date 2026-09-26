@@ -18,6 +18,16 @@ if [[ -f "$agent_root/../.env" ]]; then
   done < "$agent_root/../.env"
 fi
 
+# The release key no longer lives in the working tree. Point Gradle at its
+# out-of-repo location unless the caller already chose one.
+export SANAA_KEYSTORE_PATH="${SANAA_KEYSTORE_PATH:-/root/.secrets/sanaa-agent.keystore}"
+if [[ ! -f "$SANAA_KEYSTORE_PATH" ]]; then
+  echo "Keystore not found at $SANAA_KEYSTORE_PATH" >&2
+  echo "Set SANAA_KEYSTORE_PATH to the release key, or export KEYSTORE_PASS/KEY_PASS" >&2
+  echo "and place the key there, before running a signed release build." >&2
+  exit 1
+fi
+
 cd "$agent_root"
 bash mission/amara-10-10/scripts/check_progress.sh
 ./gradlew testDebugUnitTest

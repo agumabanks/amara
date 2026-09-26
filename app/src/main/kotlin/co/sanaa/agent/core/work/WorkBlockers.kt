@@ -10,15 +10,19 @@ import org.json.JSONObject
 
 /** Unresolved work is independent of the most recent successful/idle cycle. */
 class WorkBlockers(private val context: Context) {
+    data class GroupPromotionEvidence(val id: String, val name: String, val verifiedAt: Long)
     private val prefs = context.getSharedPreferences("work_blockers", Context.MODE_PRIVATE)
     private val history = context.getSharedPreferences("resolved_work_blockers", Context.MODE_PRIVATE)
-    private val reporter by lazy { NotificationReporter(context) }
+    private val reporter by lazy { NotificationReporter(context, co.sanaa.agent.core.CredentialVault(context)) }
+    private val batteryHold = BatteryWorkHold(context)
 
     @Synchronized fun flag(key: String, task: String, reason: String, ownerAction: Boolean = false,
                            action: String = "Amara will retry when eligible. If this persists, inspect the affected app.",
                            global: Boolean = false, managerReport: Boolean = false, now: Long = System.currentTimeMillis()) {
         val old = JSONObject(prefs.getString(key, "{}")!!)
-        val alert = old.optLong("lastAlert") == 0L || now - old.optLong("lastAlert") >= 30 * 60_000L
+        val alertInterval = if (key.startsWith("failure:WA_BROADCAST:") &&
+            reason.startsWith("Group recovery check unresolved")) 6 * 60 * 60_000L else 30 * 60_000L
+        val alert = old.optLong("lastAlert") == 0L || now - old.optLong("lastAlert") >= alertInterval
         val row = JSONObject().put("task", task).put("reason", Redactor.redact(reason).take(600))
             .put("managerReport", managerReport || old.optBoolean("managerReport")).put("ownerAction", ownerAction).put("action", action).put("global", global)
             .put("continuation", if (global) "Autonomous work is waiting for this device condition to clear."
@@ -29,7 +33,7 @@ class WorkBlockers(private val context: Context) {
         if (alert) runCatching {
             reporter.report("Amara: $task needs attention", "${row.getString("reason")}\n$action\n${row.getString("continuation")}",
                 if (ownerAction) NotificationReporter.Priority.ACTION_NEEDED else NotificationReporter.Priority.INFO,
-                notificationId = notificationId(key))
+                notificationId = notificationId(key), ongoing = key.startsWith("device:"))
         }
     }
 
@@ -49,8 +53,9 @@ class WorkBlockers(private val context: Context) {
         val scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
         if (level < 0 || scale <= 0) return
         val percent = level * 100 / scale
-        if (percent <= 15) flag("device:battery", "Device battery", "Battery is $percent%; autonomous work pauses at 15% or below.",
-            ownerAction = true, action = "Connect a reliable charger. Work resumes automatically above 15%.", global = true)
+        if (batteryHold.observe(percent)) flag("device:battery", "Device battery",
+            "Battery is $percent%; autonomous work is paused until charge reaches 20%.",
+            ownerAction = true, action = "Connect a reliable charger. Work resumes automatically at 20%.", global = true)
         else clear("device:battery")
         val temperature = battery.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)
         if (temperature >= 450) flag("device:temperature", "Device temperature",
@@ -93,7 +98,9 @@ class WorkBlockers(private val context: Context) {
     fun resolveSuccess(item: WorkItem, verifiedAt: Long, evidence: String) {
         val oldDestination=listOf("group_target","chat_key","contact_id").joinToString(":") { item.payload.optString(it) }
         val scopes=mutableSetOf(scope(item))
-        if(item.kind != WorkKind.WA_REPLY_INBOUND) scopes += "${item.kind}:${co.sanaa.agent.core.ContentHashing.hash(oldDestination)}"
+        if(item.kind != WorkKind.WA_REPLY_INBOUND &&
+            !(item.kind == WorkKind.WA_BROADCAST && item.payload.optString("group_id").isNotBlank()))
+            scopes += "${item.kind}:${co.sanaa.agent.core.ContentHashing.hash(oldDestination)}"
         for(scope in scopes) for(prefix in listOf("wait:","failure:")) {
             val key=prefix+scope
             val row=runCatching { JSONObject(prefs.getString(key,"{}")!!) }.getOrNull() ?: continue
@@ -101,16 +108,18 @@ class WorkBlockers(private val context: Context) {
         }
     }
 
-    fun reconcileGroups(groups: List<Pair<String,Long>>) {
+    fun reconcileGroups(groups: List<GroupPromotionEvidence>) {
         refreshBattery()
         // Being not due is a scheduling state, never an unresolved delivery failure.
         for((key,value) in prefs.all) {
             val row=runCatching { JSONObject(value.toString()) }.getOrNull() ?: continue
             if(row.optString("reason")=="Group schedule is paused or not due") clear(key,"Reclassified as a normal schedule wait; no delivery claimed")
         }
-        for((target,at) in groups) if(at>0) resolveSuccess(WorkItem("reconcile",Domain.WHATSAPP,WorkKind.WA_BROADCAST,
-            JSONObject().put("group_target",target),baseValueKes=0.0,urgencyHalfLifeHours=1.0,estimatedScreenSeconds=0),
-            at,"A later group promotion was verified at ${java.time.Instant.ofEpochMilli(at)}")
+        for(group in groups) if(group.id.isNotBlank() && group.verifiedAt>0) resolveSuccess(
+            WorkItem("reconcile",Domain.WHATSAPP,WorkKind.WA_BROADCAST,
+                JSONObject().put("group_id",group.id).put("group_target",group.name),
+                baseValueKes=0.0,urgencyHalfLifeHours=1.0,estimatedScreenSeconds=0),
+            group.verifiedAt,"A later group promotion was verified at ${java.time.Instant.ofEpochMilli(group.verifiedAt)}")
     }
 
     @Synchronized fun clearStaleWaits(activeScopes: Set<String>): Int {
@@ -143,7 +152,9 @@ class WorkBlockers(private val context: Context) {
 
     companion object {
         internal fun scope(item: WorkItem): String {
-            val destination = listOf("group_target", "chat_key", "contact_id", "target", "conversation_identity", "manager_report", "manager_command_candidate").joinToString(":") { item.payload.optString(it) }
+            val fields = listOf("group_target", "chat_key", "contact_id", "target", "conversation_identity", "manager_report", "manager_command_candidate")
+            val destination = (if(item.kind == WorkKind.WA_BROADCAST && item.payload.optString("group_id").isNotBlank())
+                listOf("group_id") + fields else fields).joinToString(":") { item.payload.optString(it) }
             return "${item.kind}:${co.sanaa.agent.core.ContentHashing.hash(destination)}"
         }
         private fun notificationId(key: String) = 0x40000000 or (key.hashCode() and 0x0fffffff)

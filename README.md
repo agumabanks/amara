@@ -24,6 +24,26 @@ Amara is an advanced prototype, not a certified autonomous employee. Local code 
 - API credentials and the Terminal PIN use encrypted preferences. Operational history uses the app-private SQLite database and is not described as encrypted at rest.
 - OTP, biometric, CAPTCHA, account-login, and protected permission screens remain owner-assisted.
 
+## Test coverage and what is not automated
+
+There is **no `androidTest` source set** in this repository. Every test is a JVM
+unit test under `app/src/test` (JUnit4, Robolectric, MockWebServer) or a Dart test
+under `flutter_ui/test`. Nothing in CI or in the local gates exercises a real
+device.
+
+That has a concrete consequence you should not gloss over: **any behaviour that
+depends on a real Oppo, a real WhatsApp/TikTok install, an AccessibilityService, a
+NotificationListenerService, or an unattended 24-hour run has no automated
+regression coverage at all.** It is verified only by the manual ADB evidence
+recorded under `mission/`. If a layout drifts on a new WhatsApp version, CI stays
+green and the failure appears only on the device.
+
+CI (`.github/workflows/ci.yml`) runs the Gradle unit tests, Flutter analyze/test,
+Dart format, and the two source-only mission gates (side-effect boundary and
+evidence redaction). The full traceability audit additionally needs a signed
+release APK and its recorded sha256, so it is informational in CI and is enforced
+locally by `mission/amara-10-10/scripts/run_local_gates.sh`.
+
 ## Build
 
 ```bash

@@ -2,9 +2,16 @@
 
 ## Keystore
 
-- Location: `sanaa-agent.keystore` at the project root
+- Location: **outside the working tree**, at `/root/.secrets/sanaa-agent.keystore`
+  (mode `0600`). Override with the `SANAA_KEYSTORE_PATH` environment variable.
 - Alias: `sanaa`
-- The keystore file is gitignored and must NOT be committed.
+- The keystore is not in the repository and must NOT be committed.
+
+A copy used to sit at the project root as `sanaa-agent.keystore` with mode `0644`,
+readable by any local user and process. It was moved to the path above after its
+SHA-256 was verified unchanged, and `app/build.gradle` now resolves the path from
+`SANAA_KEYSTORE_PATH` with that secure default. If you are building on a different
+host, export `SANAA_KEYSTORE_PATH` to wherever you keep the key.
 
 ## Required environment variables
 
@@ -12,6 +19,8 @@
 
 - `KEYSTORE_PASS`  — the keystore (store) password
 - `KEY_PASS`       — the key (alias) password
+- `SANAA_KEYSTORE_PATH` — optional; keystore location. Defaults to
+  `/root/.secrets/sanaa-agent.keystore`.
 
 Set them before invoking a release build:
 

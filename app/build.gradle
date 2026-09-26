@@ -11,8 +11,8 @@ android {
         applicationId "co.sanaa.agent"
         minSdk 24
         targetSdk 36
-        versionCode 39
-        versionName "0.10.26"
+        versionCode 90
+        versionName "0.10.77"
 
         // The dedicated Oppo test device is ARM64. Keeping one ABI avoids a
         // universal APK that bundles three copies of Flutter and JNI engines.
@@ -25,7 +25,14 @@ android {
 
     signingConfigs {
         release {
-            storeFile file("../sanaa-agent.keystore")
+            // The release key lives OUTSIDE the working tree. RELEASE.md asks for this,
+            // and the previous hardcoded "../sanaa-agent.keystore" put a world-readable
+            // signing key at the repo root where any local process or stray backup could
+            // read it. SANAA_KEYSTORE_PATH overrides the location; the path is never
+            // committed because *.keystore is gitignored and the default is outside
+            // the repository entirely.
+            storeFile file(providers.environmentVariable("SANAA_KEYSTORE_PATH")
+                .orElse("/root/.secrets/sanaa-agent.keystore").get())
             storePassword System.getenv("KEYSTORE_PASS")
             keyAlias "sanaa"
             keyPassword System.getenv("KEY_PASS")

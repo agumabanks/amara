@@ -1386,3 +1386,33 @@ blockers listed in the final report.
 Session status: **PARTIALLY COMPLETE** — local corrections and the accessibility blocker
 are resolved; the commercial execution bridge, remaining live signal feeds, controlled
 device campaign, and elapsed-time evaluation gates are not complete.
+
+---
+
+## Audit repair pass — 2026-09-26
+
+Fresh full Kotlin validation after the audit repairs:
+`./gradlew :app:testDebugUnitTest --no-daemon` exit 0;
+**197 suites / 1193 tests / 0 failures / 0 errors / 0 skipped**.
+
+Signed release rebuilt from the same source with the relocated keystore.
+`apksigner verify` exit 0; signer `CN=Sanaa Agent, O=Sanaa Media, C=UG`,
+certificate SHA-256
+`55e237c9c2079f3e413d2b3d00e84a6c577a5c731c837bbefd49f64fd41ea6c4` — the
+established identity, so in-place device upgrades still apply.
+
+Repairs in this pass: mission gates added to CI; traceability dead-code guard
+corrected to recognise Kotlin method references (`::fn`); notification text now
+scrubbed of literal vault credentials before it can reach the lock screen, with
+a new 4-test regression; release keystore moved out of the working tree to
+`/root/.secrets/sanaa-agent.keystore` (mode 0600) with an env-overridable path.
+
+Open and NOT repaired: `ConversationEngine` is constructed but never invoked in
+production, which also means `SokoApiClient.unreadMessages()` never runs and
+matrix rows `CE-CONTACT-AUTH-01` / `CE-CONTACT-PRIV-01` are overstated; there is
+no `androidTest` source set at all, so no real-device behaviour has automated
+coverage. Full detail and reasoning in `mission/audit-20260926/FINDINGS.md`.
+
+[tests] suites=197 tests=1193 failures=0 errors=0 skipped=0
+
+[apk] sha256=fc79a85f32f57d7f1ff480dbadf35608b94e04b251edea9eac355f848fd1b580 (audit repair pass; source-current, signed with the established identity)

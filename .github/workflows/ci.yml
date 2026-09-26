@@ -66,3 +66,77 @@ jobs:
       - name: flutter test
         working-directory: flutter_ui
         run: flutter test
+
+      - name: Dart format check
+        working-directory: flutter_ui
+        run: dart format --output=none --set-exit-if-changed lib test
+
+  mission-gates:
+    name: Mission gates (boundary + redaction)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Validate Gradle wrapper
+        uses: gradle/wrapper-validation-action@v3
+
+      - name: Setup Gradle (vendors wrapper)
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      # These two gates are source-only: no keystore, no device, no release APK.
+      # They used to run only inside mission/amara-10-10/scripts/run_local_gates.sh,
+      # which a human invokes by hand, so a regression could land unnoticed.
+      - name: Side-effect boundary
+        run: bash mission/amara-complete-employee/scripts/check_side_effect_boundary.sh
+
+      - name: Evidence redaction
+        run: bash mission/amara-complete-employee/scripts/check_evidence_redaction.sh
+
+      - name: Traceability negative fixture (harness self-test)
+        run: bash mission/amara-complete-employee/scripts/check_traceability.sh negative-fixture
+
+  # The full traceability audit needs a signed release APK and its recorded sha256
+  # (see the stale-APK guard in check_traceability.sh). CI has no signing secret, so
+  # it cannot produce that APK and the audit would always fail here. It runs for
+  # signal; it is enforced locally by run_local_gates.sh.
+  traceability-audit:
+    name: Traceability audit (informational, needs signed APK)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Gradle (vendors wrapper)
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Run unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+      - name: Traceability audit
+        run: bash mission/amara-complete-employee/scripts/check_traceability.sh || true

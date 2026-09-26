@@ -399,11 +399,18 @@ def validate(matrix_path, results_dir, log_path, mission_path, strict=True, char
                 test_corpus = pathlib.Path("app/src/test")
                 orphan = []
                 for fn in sorted(funs):
+                    # A production call site is either an invocation `fn(` or a Kotlin
+                    # method/function reference `::fn` (e.g. `config::saveRemoteConfig`).
+                    # The invocation-only pattern missed every method reference and
+                    # reported live production code as test-only dead weight.
                     pattern = rf"\b{fn}\s*\("
+                    ref_pattern = rf"::{fn}\b"
                     in_own_calls = len(re.findall(pattern, own)) > 1  # declaration alone doesn't count
-                    in_other_main = re.search(pattern, others_text) is not None
+                    in_own_refs = bool(re.search(ref_pattern, own))
+                    in_other_main = re.search(pattern, others_text) is not None or \
+                        re.search(ref_pattern, others_text) is not None
                     in_tests = any(re.search(pattern, p.read_text()) for p in test_corpus.rglob("*.kt"))
-                    if in_tests and not in_other_main and not in_own_calls:
+                    if in_tests and not in_other_main and not in_own_calls and not in_own_refs:
                         orphan.append(fn)
                 if orphan:
                     errors.append(

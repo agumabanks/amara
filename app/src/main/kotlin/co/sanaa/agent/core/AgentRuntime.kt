@@ -55,6 +55,12 @@ import androidx.work.*
 import java.util.concurrent.TimeUnit
 
 class AgentRuntime private constructor(private val context: Context, useEncryptedPrefs: Boolean) {
+    val applicationContext: Context get() = context
+    /** Preserve shop isolation when notification listeners persist conversation events. */
+    fun verifiedConversationKey(conversationId: String): String? = runCatching {
+        val shop = TerminalShopIdentity.read(context)
+        "${shop.scope}:$conversationId"
+    }.getOrNull()
     val config = SecureConfig(context, useEncryptedPrefs = useEncryptedPrefs)
     val groupSettings=co.sanaa.agent.modules.WhatsAppGroupSettings(context)
     val managerOutbox = co.sanaa.agent.core.work.ManagerReportOutbox(context)
@@ -65,9 +71,13 @@ class AgentRuntime private constructor(private val context: Context, useEncrypte
     val backend = BackendSync(context, config, memory)
     val groq = GroqClient(config, memory)
     val soko = SokoApiClient(config) { TerminalShopIdentity.readFresh(context) }
+    fun currentShopScope(): String = TerminalShopIdentity.readFresh(context).scope
     val actions = AccessibilityActions(context, memory)
     val state = ModuleStateStore(context)
-    val reporter = NotificationReporter(context)
+    // The vault is constructed before the reporter so notification text can be
+    // scrubbed of literal credentials before it reaches the lock screen.
+    val vault = CredentialVault(context)
+    val reporter = NotificationReporter(context, vault)
     val verifier = ActionVerifier(actions, soko, backend)
     val queue = TaskQueue()
     val sideEffects = SideEffectRunner(SideEffectLedger.from(memory)).apply {
@@ -82,11 +92,23 @@ class AgentRuntime private constructor(private val context: Context, useEncrypte
         evaluationObserver = { status, capability, key ->
             evaluation.record("external_effect", key, org.json.JSONObject().put("status", status).put("capability", capability))
         }
+        receiptObserver = { status, capability, key, target, contentHash, workKey ->
+            // Canonical-ledger projection into owner-visible receipts; failures here
+            // never affect dispatch. No message bodies or customer conversation content.
+            runCatching {
+                ModuleActivityStore(context).use { it.recordEffect(capability, key, status, target, contentHash) }
+            }
+            if (config.telemetryOptIn && config.configSyncEnabled) runCatching {
+                val receiptWorkKey = workKey.ifBlank { key }
+                val attempt = workQueue.readableDatabase.rawQuery(
+                    "SELECT attempt FROM work_items WHERE dedupe_key=? ORDER BY id DESC LIMIT 1", arrayOf(receiptWorkKey)
+                ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+                backend.eventOutbox.enqueueEffect(status, capability, key, attempt, receiptWorkKey)
+            }
+        }
     }
     val targetVerifiers = TargetBoundVerifiers(actions)
 
-    /** Keystore-backed vault for app-specific credentials (never the device unlock PIN). */
-    val vault = CredentialVault(context)
     /**
      * Single submission authority for the Soko staff PIN: refuses release while
      * locked and records every production login outcome back onto the vault.
@@ -251,6 +273,7 @@ class AgentRuntime private constructor(private val context: Context, useEncrypte
             enqueueManagerReport(source,body)
         },
         loopDiagnostics = { workLoop.diagnostics() + ("jobActive" to (workLoopJob?.isActive == true)) },
+        pendingWorkCount = { workQueue.pendingCount() },
         scheduleBlockers = {
             contacts.listAll().filter { it.isGroup && it.canSend }.mapNotNull { entry ->
                 val row = groupSettings.row(entry)
@@ -261,20 +284,25 @@ class AgentRuntime private constructor(private val context: Context, useEncrypte
         },
         reconcile = {
             flushManagerReports()
+            if (config.whatsAppAutomationEnabled && config.whatsAppInboundEnabled && actions.isAvailable())
+                workQueue.recoverUnsentWhatsApp(hasReceipt = { memory.findSideEffectTransaction(it) != null })
             co.sanaa.agent.core.work.WorkBlockers(context).reconcileGroups(contacts.listAll().filter { it.isGroup }.map {
-                it.displayName to ((groupSettings.row(it)["lastPromotionAt"] as? Number)?.toLong() ?: 0L)
+                co.sanaa.agent.core.work.WorkBlockers.GroupPromotionEvidence(it.id, it.displayName,
+                    (groupSettings.row(it)["lastPromotionAt"] as? Number)?.toLong() ?: 0L)
             })
         },
         governorDashboard = { safetyGovernor.dashboard() },
     )
 
-    fun enqueueManagerReport(source:String, body:String):Boolean {
+    fun enqueueManagerReport(source:String, body:String, shopScope:String = ""):Boolean {
         val item=co.sanaa.agent.core.work.ManagerReportWork.from(config.managerWhatsApp,source,body)
         if(item==null) {
             workBlockers.flag("manager:configuration","Manager updates","Manager WhatsApp number is missing; this update cannot be sent.",
                 ownerAction=true,action="Set the manager WhatsApp number in Settings and review the originating task.")
             return false
         }
+        if (shopScope.isNotBlank()) item.payload.put("shop_scope", shopScope)
+        workBlockers.clear("manager:configuration", "A manager destination is configured")
         val admitted=managerOutbox.enqueue(item,workQueue::offer)
         if(!admitted) workBlockers.flag("manager:outbox","Manager updates","Manager updates are saved and waiting for queue space.",
             action="Amara retries admission after completed work and each health check. No delivery is claimed.")
@@ -311,10 +339,12 @@ class AgentRuntime private constructor(private val context: Context, useEncrypte
     val memoryBackup = co.sanaa.agent.core.memory.MemoryBackupManager(config, backend, chatStore, learningLoop, tikTokSocialStore)
 
     // New modules — HumanConversationEngine, SokoCatalogModule
+    val managerConsultations = ManagerConsultations(context)
     val humanConversation = HumanConversationEngine(config, groq, memory, chatStore, actions, sideEffects, reporter, co.sanaa.agent.modules.WhatsAppReplyStore(context), co.sanaa.agent.modules.ConversationKnowledge(context),
         shopIdentity = { TerminalShopIdentity.readFresh(context) },
         catalogue = { soko.promotableOfferings().map { it.summary() } },
         commerceReply = { message, history -> co.sanaa.agent.modules.WhatsAppCommerceAssistant(soko).composeReply(message,history) },
+        openConsultation = { source, scope, contactId, target, question -> managerConsultations.open(source, scope, contactId, target, question) },
         managerReport = { source, body -> enqueueManagerReport(source,body) },
         ownerContext = { config.businessBrief + "\n" + contextLoader.loadAll(listOf("business", "whatsapp")) },
         groupContext = { groupSettings.context(it) },
@@ -351,11 +381,17 @@ class AgentRuntime private constructor(private val context: Context, useEncrypte
     val tikTokCadence = co.sanaa.agent.core.work.TikTokCadence(context)
     private val workSources: List<WorkSource> = listOf(
         co.sanaa.agent.core.shorts.ShortsWorkSource(context),
+        co.sanaa.agent.core.work.sources.MeetingReminderSource(context) {
+            config.whatsAppAutomationEnabled && config.whatsAppFollowUpsEnabled
+        },
         co.sanaa.agent.core.work.sources.WhatsAppGroupSource(
             { config.whatsAppAutomationEnabled && config.whatsAppGroupsEnabled },
-            { contacts.listAll().filter { it.isGroup && groupSettings.allows(it,"promote") }.map { it.displayName }.distinct() },
-            intervalFor = { name -> contacts.listAll().filter { it.isGroup && it.displayName==name }.singleOrNull()?.let(groupSettings::interval) ?: 1440 },
-            nextDue = { name -> contacts.listAll().filter { it.isGroup && it.displayName==name }.singleOrNull()?.let(groupSettings::due) ?: Long.MAX_VALUE },
+            { contacts.listAll().filter { it.isGroup && groupSettings.allows(it,"promote") }
+                .map { co.sanaa.agent.core.work.sources.GroupDestination(it.id, it.displayName) } },
+            intervalFor = { group -> contacts.byId(group.id)?.takeIf { it.isGroup && it.displayName == group.name }
+                ?.let(groupSettings::interval) ?: 1440 },
+            nextDue = { group -> contacts.byId(group.id)?.takeIf { it.isGroup && it.displayName == group.name }
+                ?.let(groupSettings::due) ?: Long.MAX_VALUE },
         ),
         WhatsAppFollowUpSource(chatStore, { config.whatsAppAutomationEnabled && config.whatsAppFollowUpsEnabled }, { config.whatsAppFollowUpDays }),
         SokoWorkSource { config.sokoAutoSync || config.proactiveReadOnlyAudits },
@@ -392,6 +428,12 @@ class AgentRuntime private constructor(private val context: Context, useEncrypte
         executionBoundary = { block -> queue.withExclusiveDeviceAction { block() } },
         onChosen = { item, hour -> learningLoop.appliedDecision(item.dedupeKey,item.kind.name,hour) },
         onOutcome = { result ->
+            if (config.telemetryOptIn && config.configSyncEnabled) {
+                runCatching { backend.eventOutbox.enqueueOutcome(result) }.onFailure {
+                    evaluation.record("event_outbox_enqueue_failed", result.item.dedupeKey,
+                        org.json.JSONObject().put("error_class", it.javaClass.simpleName))
+                }
+            }
             flushManagerReports()
             recoveryHealth.observe(result)?.let { alert ->
                 reporter.report("Amara needs recovery",alert,co.sanaa.agent.notifications.NotificationReporter.Priority.ACTION_NEEDED)
@@ -400,7 +442,8 @@ class AgentRuntime private constructor(private val context: Context, useEncrypte
             }
             learningLoop.decisionOutcome(result.item.dedupeKey,result.status.name)
             if(result.item.kind==co.sanaa.agent.core.work.WorkKind.WA_BROADCAST && result.item.payload.optString("group_target").isNotBlank()) {
-                contacts.listAll().filter { it.isGroup && it.displayName==result.item.payload.optString("group_target") }.singleOrNull()?.let {
+                contacts.byId(result.item.payload.optString("group_id"))
+                    ?.takeIf { it.isGroup && it.displayName == result.item.payload.optString("group_target") }?.let {
                     if(result.status!=co.sanaa.agent.core.work.WorkStatus.SKIPPED) groupSettings.outcome(it,result.status.name,result.failure?.summary.orEmpty(), result.item.dedupeKey,
                         memory.findSideEffectTransaction(result.item.dedupeKey)?.state?.name ?: "NOT_STARTED")
                 }
