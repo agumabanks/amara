@@ -174,7 +174,12 @@ class _WhatsAppGroupsScreenState extends State<WhatsAppGroupsScreen> {
                             'Identity …${id.length > 8 ? id.substring(id.length - 8) : id} · ${g['originVerified'] == true ? 'Observed from WhatsApp' : 'Contact directory'}',
                           ),
                           TextButton(
-                            onPressed: () => editProfile(g, 'name', 'Correct saved group name', 'Copy the complete name from WhatsApp. The next check verifies access.'),
+                            onPressed: () => editProfile(
+                              g,
+                              'name',
+                              'Correct saved group name',
+                              'Copy the complete name from WhatsApp. The next check verifies access.',
+                            ),
                             child: const Text('Correct saved name'),
                           ),
                           TextButton.icon(

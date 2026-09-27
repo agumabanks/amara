@@ -101,6 +101,10 @@ void main() {
     // Canonical fail-closed shape: allow-lists are explicit arrays.
     expect(saved.contains('"allowedProducts":['), isTrue);
     expect(saved.contains('"approvedChannels":['), isTrue);
+    // This mock acknowledges the write but returns the old document on read.
+    // The screen must expose the mismatch instead of claiming persistence.
+    expect(find.textContaining('Policy was not confirmed'), findsOneWidget);
+    expect(find.text('Policy saved and confirmed'), findsNothing);
   });
 
   testWidgets(

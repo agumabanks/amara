@@ -631,10 +631,24 @@ class _OperationalHealthCard extends StatelessWidget {
     final activity = loop?['lastSummary']?.toString() ?? '';
     final battery = data['batteryPercent']?.toString() ?? '—';
     final network = data['network']?.toString() ?? 'Unknown';
+    final batteryPercent = (data['batteryPercent'] as num?)?.toInt();
+    final batteryPaused =
+        data['batteryPaused'] == true ||
+        (data['batteryPaused'] == null &&
+            batteryPercent != null &&
+            batteryPercent >= 0 &&
+            batteryPercent <= 15);
+    final lowBattery =
+        batteryPaused ||
+        (batteryPercent != null && batteryPercent >= 0 && batteryPercent <= 20);
+    final networkLimited = network == 'OFFLINE' || network == 'LIMITED';
+    final critical = lowBattery || networkLimited;
+    final pendingValue = data['pendingWorkCount'];
+    final pending = pendingValue is num ? pendingValue.toInt() : null;
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 2),
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(critical ? 18 : 12),
       decoration: BoxDecoration(
         color: healthy ? const Color(0xFF10231F) : const Color(0xFF2A1B14),
         borderRadius: BorderRadius.circular(14),
@@ -642,54 +656,109 @@ class _OperationalHealthCard extends StatelessWidget {
           color: healthy ? const Color(0xFF2D806D) : const Color(0xFFF97316),
         ),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            healthy ? Icons.verified_outlined : Icons.warning_amber_rounded,
-            color: healthy ? const Color(0xFF50E3C2) : const Color(0xFFF97316),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  healthy ? 'Amara is ready' : 'Amara needs attention',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                  ),
+          Row(
+            children: [
+              Icon(
+                healthy ? Icons.verified_outlined : Icons.warning_amber_rounded,
+                color: healthy
+                    ? const Color(0xFF50E3C2)
+                    : const Color(0xFFF97316),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      healthy ? 'Amara is ready' : 'Amara needs attention',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      blockers.isEmpty
+                          ? '$network · Battery $battery%\n$activity'
+                          : blockers.first,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                      ),
+                    ),
+                    if (blockers.length > 1)
+                      Text(
+                        '${blockers.length} issues · open Doctor to review',
+                        style: const TextStyle(
+                          color: Colors.white54,
+                          fontSize: 11,
+                        ),
+                      ),
+                  ],
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  blockers.isEmpty
-                      ? '$network · Battery $battery%\n$activity'
-                      : blockers.first,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              IconButton(
+                tooltip: 'Open Doctor and fixes',
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const DoctorScreen()),
                 ),
-                if (blockers.length > 1)
-                  Text(
-                    '${blockers.length} issues · open Doctor to review',
-                    style: const TextStyle(color: Colors.white54, fontSize: 11),
-                  ),
-              ],
+                icon: const Icon(Icons.build_circle_outlined),
+              ),
+              IconButton(
+                tooltip: 'Run health check',
+                onPressed: onRefresh,
+                icon: const Icon(Icons.refresh, color: Color(0xFF50E3C2)),
+              ),
+            ],
+          ),
+          if (critical) ...[
+            const SizedBox(height: 14),
+            if (lowBattery)
+              Text(
+                batteryPaused && (batteryPercent == null || batteryPercent < 0)
+                    ? 'Connect charger · Battery reading unavailable · Screen work remains paused'
+                    : batteryPaused
+                    ? 'Connect charger · Battery $battery% · Screen work is paused until 20%'
+                    : 'Connect charger · Battery $battery% · Work pauses at 15%',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            if (networkLimited) ...[
+              if (lowBattery) const SizedBox(height: 8),
+              Text(
+                network == 'OFFLINE'
+                    ? 'Restore internet · No connection'
+                    : 'Restore internet · Connection is limited',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Text(
+              'Queued work: ${pending ?? 'unknown'} · Latest worker status: ${activity.isEmpty ? 'unknown' : activity}',
+              style: const TextStyle(color: Colors.white70),
             ),
-          ),
-          IconButton(
-            tooltip: 'Open Doctor and fixes',
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const DoctorScreen()),
+            TextButton.icon(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DoctorScreen()),
+              ),
+              icon: const Icon(Icons.open_in_new),
+              label: const Text('Review phone health'),
             ),
-            icon: const Icon(Icons.build_circle_outlined),
-          ),
-          IconButton(
-            tooltip: 'Run health check',
-            onPressed: onRefresh,
-            icon: const Icon(Icons.refresh, color: Color(0xFF50E3C2)),
-          ),
+          ],
         ],
       ),
     );

@@ -119,8 +119,9 @@ class _SettingsScreenState extends State<SettingsScreen>
         ],
       ),
     );
-    if (value != null && mounted)
+    if (value != null && mounted) {
       await _updateSetting('youtubeTimezone', value);
+    }
     input.dispose();
   }
 

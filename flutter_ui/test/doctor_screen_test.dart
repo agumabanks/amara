@@ -16,20 +16,24 @@ void main() {
     var reads = 0;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'deepRepairWhatsAppGroups') {
-        repaired = true;
-        return {'summary': 'Repair attempted'};
-      }
-      if (call.method == 'doctorStatus') {
-        reads++;
-        return {
-          'health': {'blockers': []},
-          'issues': repaired ? [] : [{'task': 'Group', 'reason': 'Group unavailable'}],
-          'resolved': [],
-        };
-      }
-      return null;
-    });
+          if (call.method == 'deepRepairWhatsAppGroups') {
+            repaired = true;
+            return {'summary': 'Repair attempted'};
+          }
+          if (call.method == 'doctorStatus') {
+            reads++;
+            return {
+              'health': {'blockers': []},
+              'issues': repaired
+                  ? []
+                  : [
+                      {'task': 'Group', 'reason': 'Group unavailable'},
+                    ],
+              'resolved': [],
+            };
+          }
+          return null;
+        });
     await tester.pumpWidget(const MaterialApp(home: DoctorScreen()));
     await tester.pumpAndSettle();
     final button = find.text('Deep repair WhatsApp groups');
@@ -122,29 +126,34 @@ void main() {
     );
   }
 
-  testWidgets('media review displays publication labels and states', (tester) async {
+  testWidgets('media review displays publication labels and states', (
+    tester,
+  ) async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'previewMediaCleanup') {
-        return {
-          'candidates': [
-            {
-              'id': 'candidate-a',
-              'store': 'tiktok-bound-media',
-              'bytes': 1048576,
-              'label': 'TikTok publication',
-              'status': 'VERIFIED',
-            },
-          ],
-        };
-      }
-      return {'health': {}, 'issues': [], 'resolved': []};
-    });
+          if (call.method == 'previewMediaCleanup') {
+            return {
+              'candidates': [
+                {
+                  'id': 'candidate-a',
+                  'store': 'tiktok-bound-media',
+                  'bytes': 1048576,
+                  'label': 'TikTok publication',
+                  'status': 'VERIFIED',
+                },
+              ],
+            };
+          }
+          return {'health': {}, 'issues': [], 'resolved': []};
+        });
     await tester.pumpWidget(const MaterialApp(home: DoctorScreen()));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Review obsolete media'));
     await tester.pumpAndSettle();
-    expect(find.text('TikTok publication\nVERIFIED\ncandidate-a'), findsOneWidget);
+    expect(
+      find.text('TikTok publication\nVERIFIED\ncandidate-a'),
+      findsOneWidget,
+    );
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
   });

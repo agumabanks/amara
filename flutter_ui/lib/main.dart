@@ -72,10 +72,10 @@ class AppShellState extends State<AppShell> {
 
   void switchTab(int index) => setState(() => _index = index);
 
-  static const _tabs = [
+  List<Widget> get _tabs => [
     HomeScreen(),
     WorkScreen(),
-    MarketScreen(),
+    MarketScreen(active: _index == 2),
     ChatTab(),
     SettingsScreen(),
   ];

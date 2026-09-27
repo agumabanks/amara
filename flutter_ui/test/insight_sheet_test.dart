@@ -31,9 +31,7 @@ void main() {
       await tester.pump();
       expect(
         tester
-            .widget<FilledButton>(
-              find.byKey(const ValueKey('price-proposal')),
-            )
+            .widget<FilledButton>(find.byKey(const ValueKey('price-proposal')))
             .onPressed,
         isNull,
       );

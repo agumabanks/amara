@@ -103,6 +103,37 @@ class AgentChannel {
           .map((raw) => CommitmentSummary.fromMap(raw as Map<dynamic, dynamic>))
           .toList(growable: false);
 
+  static Future<List<Map<String, dynamic>>> meetingCommitments() async =>
+      ((await _channel.invokeMethod<List<dynamic>>('meetingCommitments')) ??
+              const [])
+          .map((raw) => Map<String, dynamic>.from(raw as Map))
+          .toList(growable: false);
+
+  static Future<bool> cancelMeetingCommitment(String id) async =>
+      await _channel.invokeMethod<bool>('cancelMeetingCommitment', {
+        'id': id,
+      }) ??
+      false;
+
+  static Future<bool> confirmMeetingCommitment({
+    required String id,
+    required String localDateTime,
+    required String timezone,
+    required String target,
+    required bool remindCustomer,
+    required int reminderMinutes,
+  }) async =>
+      await _channel.invokeMethod<bool>('confirmMeetingCommitment', {
+        'id': id,
+        'localDateTime': localDateTime,
+        'timezone': timezone,
+        'target': target,
+        'remindCustomer': remindCustomer,
+        'reminderMinutes': reminderMinutes,
+        'agreementConfirmed': true,
+      }) ??
+      false;
+
   static Future<void> openAccessibility() =>
       _channel.invokeMethod('openAccessibility');
   static Future<void> openBattery() => _channel.invokeMethod('openBattery');

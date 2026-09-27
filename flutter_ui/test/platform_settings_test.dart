@@ -12,11 +12,10 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           if (call.method == 'amaraSettings') {
-            if (call.method == 'amaraSettings')
-              return {'telemetryOptIn': false};
+            return {'telemetryOptIn': false};
           }
           if (call.method == 'setAmaraSetting') {
-            if (call.method == 'setAmaraSetting') writes.add(call);
+            writes.add(call);
           }
           return true;
         });

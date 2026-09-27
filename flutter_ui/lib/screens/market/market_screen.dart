@@ -7,7 +7,8 @@ import '../doctor/doctor_screen.dart';
 import '../../bridge/agent_channel.dart';
 
 class MarketScreen extends StatefulWidget {
-  const MarketScreen({super.key});
+  const MarketScreen({super.key, this.active = true});
+  final bool active;
   @override
   State<MarketScreen> createState() => _MarketScreenState();
 }
@@ -39,6 +40,12 @@ class _MarketScreenState extends State<MarketScreen>
   }
 
   @override
+  void didUpdateWidget(covariant MarketScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active) _refresh();
+  }
+
+  @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
@@ -51,7 +58,14 @@ class _MarketScreenState extends State<MarketScreen>
           .map((e) => e.cast<String, dynamic>())
           .toList();
   Future<void> _refresh() async {
-    if (_refreshing) return;
+    if (!widget.active ||
+        !mounted ||
+        _refreshing ||
+        (WidgetsBinding.instance.lifecycleState != null &&
+            WidgetsBinding.instance.lifecycleState !=
+                AppLifecycleState.resumed)) {
+      return;
+    }
     _refreshing = true;
     try {
       final value = await AgentChannel.marketDashboard();
@@ -142,7 +156,7 @@ class _MarketScreenState extends State<MarketScreen>
                             labelText: 'Research a product on Jiji',
                             hintText: 'e.g. receipt printer',
                             helperText:
-                                'Leave blank for Printers & Scanners. Jumia checks featured offers.',
+                                'Leave blank to research your products and services. Jumia checks featured offers.',
                           ),
                         ),
                         FilledButton.icon(

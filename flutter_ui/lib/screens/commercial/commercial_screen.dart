@@ -73,14 +73,27 @@ class _CommercialScreenState extends State<CommercialScreen>
   Future<void> _savePolicyField(String key, String value) async {
     final updated = Map<String, dynamic>.from(_policy);
     updated[key] = value;
-    final ok = await AgentChannel.commercialPolicySave(encodePolicy(updated));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(ok ? 'Policy saved' : 'Save refused — invalid policy'),
-      ),
-    );
-    await _refresh();
+    try {
+      final ok = await AgentChannel.commercialPolicySave(encodePolicy(updated));
+      if (!ok) throw StateError('Save refused — invalid policy');
+      final stored = await AgentChannel.commercialPolicyGet();
+      if (stored == null || '${parsePolicy(stored)[key]}' != value) {
+        throw StateError(
+          'The saved value could not be confirmed. Please retry.',
+        );
+      }
+      if (!mounted) return;
+      await _refresh();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Policy saved and confirmed')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Policy was not confirmed: $error')),
+      );
+    }
   }
 
   void _startPolicySetup() {
@@ -100,10 +113,16 @@ class _CommercialScreenState extends State<CommercialScreen>
         'quietHoursEnd': '',
         'dailyGlobalMessageCap': 0,
         'perCustomerDailyCap': 0,
+        'perCustomerFrequencyWindowMs': 172800000,
         'followUpLimitPerOpportunity': 0,
         'discountCeilingPercent': 0,
         'attributionWindowDays': 7,
         'campaignBudgetUgx': 0,
+        'maxConcurrentExperiments': 1,
+        'maxExperimentSpendUgx': 0,
+        'stopOnComplaint': true,
+        'stopOnRefundSpike': true,
+        'stopOnNegativeReplySpike': true,
       };
     });
   }
@@ -443,11 +462,18 @@ Map<String, dynamic> parsePolicy(String json) {
     'quietHoursEnd': map['quietHoursEnd'] ?? '',
     'dailyGlobalMessageCap': map['dailyGlobalMessageCap'],
     'perCustomerDailyCap': map['perCustomerDailyCap'],
+    'perCustomerFrequencyWindowMs':
+        map['perCustomerFrequencyWindowMs'] ?? 172800000,
     'followUpLimitPerOpportunity': map['followUpLimitPerOpportunity'],
     'discountCeilingPercent': map['discountCeilingPercent'],
     'attributionWindowDays':
         (((map['attributionWindowMs'] ?? 0) as num) / 86400000).round(),
     'campaignBudgetUgx': map['campaignBudgetUgx'],
+    'maxConcurrentExperiments': map['maxConcurrentExperiments'] ?? 1,
+    'maxExperimentSpendUgx': map['maxExperimentSpendUgx'] ?? 0,
+    'stopOnComplaint': map['stopOnComplaint'] ?? true,
+    'stopOnRefundSpike': map['stopOnRefundSpike'] ?? true,
+    'stopOnNegativeReplySpike': map['stopOnNegativeReplySpike'] ?? true,
   };
 }
 
@@ -470,7 +496,9 @@ String encodePolicy(Map<String, dynamic> fields) {
     },
     'dailyGlobalMessageCap': intOf(fields['dailyGlobalMessageCap']),
     'perCustomerDailyCap': intOf(fields['perCustomerDailyCap']),
-    'perCustomerFrequencyWindowMs': 172800000,
+    'perCustomerFrequencyWindowMs': intOf(
+      fields['perCustomerFrequencyWindowMs'],
+    ),
     'followUpLimitPerOpportunity': intOf(fields['followUpLimitPerOpportunity']),
     'campaignBudgetUgx': intOf(fields['campaignBudgetUgx']),
     'discountCeilingPercent': intOf(fields['discountCeilingPercent']),
@@ -480,8 +508,11 @@ String encodePolicy(Map<String, dynamic> fields) {
       final d = intOf(fields['attributionWindowDays']);
       return d <= 0 ? 604800000 : d * 86400000;
     }(),
-    'maxConcurrentExperiments': 1,
-    'maxExperimentSpendUgx': intOf(fields['campaignBudgetUgx']),
+    'maxConcurrentExperiments': intOf(fields['maxConcurrentExperiments']),
+    'maxExperimentSpendUgx': intOf(fields['maxExperimentSpendUgx']),
+    'stopOnComplaint': fields['stopOnComplaint'] != false,
+    'stopOnRefundSpike': fields['stopOnRefundSpike'] != false,
+    'stopOnNegativeReplySpike': fields['stopOnNegativeReplySpike'] != false,
   };
   return jsonEncode(policy);
 }
