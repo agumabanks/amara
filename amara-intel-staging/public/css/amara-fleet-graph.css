@@ -1,0 +1,123 @@
+.amara-brain-graph {
+    color: #e2e8f0;
+    background: #0b0c15;
+    border: 1px solid #334155;
+    border-radius: 14px;
+    overflow: hidden;
+    min-height: 580px;
+    box-shadow: 0 18px 48px #02061724;
+}
+.amara-graph-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    border-bottom: 1px solid #334155;
+}
+.amara-graph-title { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.amara-graph-title strong { font-size: 15px; color: #93c5fd; }
+.amara-graph-title span { font-size: 12px; color: #94a3b8; }
+.amara-graph-controls { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+.amara-graph-controls input,
+.amara-graph-controls select,
+.amara-graph-controls button {
+    height: 34px;
+    border: 1px solid #475569;
+    border-radius: 7px;
+    background: #101827;
+    color: #e2e8f0;
+    font-size: 12px;
+    padding: 5px 9px;
+}
+.amara-graph-controls input { width: 180px; }
+.amara-graph-controls button { min-width: 34px; cursor: pointer; }
+.amara-graph-controls button:hover,
+.amara-graph-controls button:focus-visible { border-color: #60a5fa; background: #1e293b; }
+.amara-graph-main { display: flex; min-height: 520px; }
+.amara-graph-canvas-wrap { position: relative; flex: 1; min-width: 0; height: 520px; }
+#amara-graph-canvas { width: 100%; height: 100%; }
+.amara-graph-message {
+    position: absolute;
+    top: 48%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 80%;
+    padding: 10px 15px;
+    border-radius: 8px;
+    background: #0f172acc;
+    color: #cbd5e1;
+    text-align: center;
+    font-size: 13px;
+}
+.amara-graph-message[hidden], .amara-graph-detail[hidden] { display: none; }
+.amara-graph-legend {
+    position: absolute;
+    left: 14px;
+    bottom: 14px;
+    display: flex;
+    gap: 7px 12px;
+    flex-wrap: wrap;
+    align-items: center;
+    max-width: min(620px, calc(100% - 28px));
+    padding: 10px 12px;
+    border: 1px solid #475569;
+    border-radius: 9px;
+    background: #0f172ae8;
+    font-size: 11px;
+    color: #cbd5e1;
+    pointer-events: none;
+}
+.amara-graph-legend strong { color: #f8fafc; }
+.amara-graph-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.amara-graph-legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.amara-graph-legend i.registry { background: #8b5cf6; }
+.amara-graph-legend i.shop { background: #14b8a6; }
+.amara-graph-legend i.healthy { background: #22c55e; }
+.amara-graph-legend i.degraded { background: #f59e0b; }
+.amara-graph-legend i.unknown { background: #94a3b8; }
+.amara-graph-legend small { color: #94a3b8; }
+.amara-graph-detail {
+    width: 300px;
+    flex: none;
+    padding: 16px;
+    overflow-y: auto;
+    border-left: 1px solid #334155;
+    background: #111827;
+    font-size: 12px;
+}
+.amara-graph-detail h3 { font-size: 16px; font-weight: 650; color: #f8fafc; margin-bottom: 8px; overflow-wrap: anywhere; }
+.amara-graph-detail .kind { color: #5eead4; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.amara-graph-detail dl { margin: 15px 0; }
+.amara-graph-detail dl div { padding: 8px 0; border-top: 1px solid #334155; }
+.amara-graph-detail dt { color: #94a3b8; }
+.amara-graph-detail dd { color: #e2e8f0; overflow-wrap: anywhere; }
+.amara-graph-detail h4 { margin: 18px 0 8px; color: #93c5fd; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.amara-intelligence-note { color: #94a3b8; font-size: 11px; line-height: 1.45; }
+.amara-command-select { width: 100%; padding: 8px; border: 1px solid #475569; border-radius: 7px; background: #0f172a; color: #e2e8f0; }
+.amara-timeline { margin: 0; padding: 0; list-style: none; }
+.amara-timeline li { border-left: 2px solid #334155; padding: 0 0 10px 10px; margin-left: 3px; }
+.amara-timeline strong, .amara-timeline span { display: block; overflow-wrap: anywhere; }
+.amara-timeline strong { color: #e2e8f0; }
+.amara-timeline span { color: #94a3b8; font-size: 11px; line-height: 1.4; }
+.amara-graph-detail button {
+    display: block;
+    width: 100%;
+    margin-top: 9px;
+    padding: 8px 10px;
+    border: 1px solid #475569;
+    border-radius: 7px;
+    color: #e2e8f0;
+    background: #1e293b;
+    text-align: left;
+    cursor: pointer;
+}
+.amara-graph-detail button:hover, .amara-graph-detail button:focus-visible { border-color: #60a5fa; }
+.amara-graph-footnote { padding: 9px 16px; border-top: 1px solid #334155; color: #94a3b8; font-size: 11px; }
+@media (max-width: 850px) {
+    .amara-graph-main { display: block; }
+    .amara-graph-canvas-wrap { height: 460px; }
+    .amara-graph-detail { width: 100%; max-height: 300px; border-left: 0; border-top: 1px solid #334155; }
+    .amara-graph-controls input { width: 145px; }
+}

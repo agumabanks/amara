@@ -32,7 +32,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 export TRACEABILITY_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 exec python3 - "$@" <<'PY'
-import glob, os, pathlib, re, shutil, subprocess, sys, tempfile
+import glob, os, pathlib, re, shutil, subprocess, sys, tempfile, time
 import xml.etree.ElementTree as ET
 
 SCRIPT = os.environ.get("TRACEABILITY_SCRIPT", "mission/amara-complete-employee/scripts/check_traceability.sh")
@@ -242,6 +242,9 @@ def validate(matrix_path, results_dir, log_path, mission_path, strict=True, char
 
     state_counts = {}
     main_sources = None
+    test_sources = {p: p.read_text() for p in pathlib.Path("app/src/test").rglob("*.kt")}
+    test_calls = set(re.findall(r"\b([a-z][A-Za-z0-9_]{5,})\s*\(", "\n".join(test_sources.values())))
+    other_main_cache = {}
     for r in rows:
         rid = r[0]
         _src, text, deps, impl_ref, focused, negative = r[1], r[2], r[3], r[4], r[5], r[6]
@@ -332,8 +335,8 @@ def validate(matrix_path, results_dir, log_path, mission_path, strict=True, char
             if not m:
                 errors.append(f"{rid}: locally_verified needs a ClassName.method( focused test"); continue
             cls, meth = m.group(1), m.group(2)
-            decl = [f for f in pathlib.Path("app/src/test").rglob("*.kt")
-                    if re.search(rf"(?:class|object)\s+{cls}\b", f.read_text())]
+            decl = [f for f, source in test_sources.items()
+                    if re.search(rf"(?:class|object)\s+{cls}\b", source)]
             if not decl:
                 errors.append(f"{rid}: test class {cls} not found in sources"); continue
             src_file = decl[0]; src = src_file.read_text()
@@ -366,9 +369,16 @@ def validate(matrix_path, results_dir, log_path, mission_path, strict=True, char
                 test_exercises = bool(declared.intersection(re.findall(r"\b([A-Z][A-Za-z0-9_]{2,})\b", src)))
                 wired_syms = re.findall(r"wired\(([A-Za-z0-9_.]+)\)", evidence + " " + blocker)
                 if main_sources is None:
-                    main_sources = list(pathlib.Path("app/src/main").rglob("*.kt")) + \
-                        list(pathlib.Path("app/src/main").rglob("*.xml"))
-                main_kt_texts = [(h, h.read_text()) for h in main_sources if h.suffix == ".kt"]
+                    # Honour TRACEABILITY_MAIN. The negative fixtures point it at a
+                    # purpose-built temp tree precisely so the reachability and
+                    # construction guards see only fixture files; reading the real
+                    # app/src/main here made the fixture's wiring anchor resolve
+                    # against production sources, so the guard under test could not
+                    # fire and the harness reported a false pass/fail.
+                    _reach_root = pathlib.Path(os.environ.get("TRACEABILITY_MAIN", DEFAULT_MAIN))
+                    main_sources = list(_reach_root.rglob("*.kt")) + \
+                        list(_reach_root.rglob("*.xml"))
+                    main_kt_texts = [(h, h.read_text()) for h in main_sources if h.suffix == ".kt"]
                 for sym in wired_syms:
                     tail = sym.split(".")[-1]
                     found_in_main = any(tail in t for _, t in main_kt_texts)
@@ -382,9 +392,15 @@ def validate(matrix_path, results_dir, log_path, mission_path, strict=True, char
                 # file must be referenced from a DIFFERENT production source file, or the
                 # class must be an Android component DECLARED in AndroidManifest.xml
                 # (manifest components are constructed by the operating system itself).
-                others_text = "\n".join(t for p, t in main_kt_texts if p != primary)
-                constructed = any(
-                    re.search(rf"\b{sym}\b", others_text) for sym in declared)
+                if primary not in other_main_cache:
+                    others = "\n".join(t for p, t in main_kt_texts if p != primary)
+                    other_main_cache[primary] = (
+                        set(re.findall(r"\b\w+\b", others)),
+                        set(re.findall(r"\b([a-z][A-Za-z0-9_]{5,})\s*\(", others)),
+                        set(re.findall(r"::([a-z][A-Za-z0-9_]{5,})\b", others)),
+                    )
+                other_symbols, other_calls, other_refs = other_main_cache[primary]
+                constructed = bool(declared.intersection(other_symbols))
                 manifest_constructed = bool(manifest_text) and any(
                     re.search(rf"(?:^|[/\s.\"]){sym}\"", manifest_text, re.M) or f".{sym}\"" in manifest_text
                     for sym in declared)
@@ -396,7 +412,6 @@ def validate(matrix_path, results_dir, log_path, mission_path, strict=True, char
                 # in test sources but nowhere else in production code.
                 own = impl_text
                 funs = set(re.findall(r"\bfun\s+([a-z][A-Za-z0-9_]{5,})\s*[(<]", own))
-                test_corpus = pathlib.Path("app/src/test")
                 orphan = []
                 for fn in sorted(funs):
                     # A production call site is either an invocation `fn(` or a Kotlin
@@ -407,9 +422,8 @@ def validate(matrix_path, results_dir, log_path, mission_path, strict=True, char
                     ref_pattern = rf"::{fn}\b"
                     in_own_calls = len(re.findall(pattern, own)) > 1  # declaration alone doesn't count
                     in_own_refs = bool(re.search(ref_pattern, own))
-                    in_other_main = re.search(pattern, others_text) is not None or \
-                        re.search(ref_pattern, others_text) is not None
-                    in_tests = any(re.search(pattern, p.read_text()) for p in test_corpus.rglob("*.kt"))
+                    in_other_main = fn in other_calls or fn in other_refs
+                    in_tests = fn in test_calls
                     if in_tests and not in_other_main and not in_own_calls and not in_own_refs:
                         orphan.append(fn)
                 if orphan:
@@ -418,8 +432,8 @@ def validate(matrix_path, results_dir, log_path, mission_path, strict=True, char
                         f"have zero production call sites; wire them into the runtime or downgrade")
         elif state == "locally_implemented" and m:
             cls, meth = m.group(1), m.group(2)
-            decl = [f for f in pathlib.Path("app/src/test").rglob("*.kt")
-                    if re.search(rf"(?:class|object)\s+{cls}\b", f.read_text())]
+            decl = [f for f, source in test_sources.items()
+                    if re.search(rf"(?:class|object)\s+{cls}\b", source)]
             if not decl:
                 errors.append(f"{rid}: test class {cls} not found in sources")
             elif not re.search(rf"fun\s+{meth}\s*\(", decl[0].read_text()):
@@ -499,9 +513,40 @@ def run_checker_env(matrix, results, log, extra_env=None):
 
 def run_negative_harness():
     base_matrix = pathlib.Path(os.environ.get("TRACEABILITY_MATRIX", DEFAULT_MATRIX)).read_text()
-    real_results = pathlib.Path(DEFAULT_RESULTS)
     tmp_root = pathlib.Path(tempfile.mkdtemp(prefix="trace-fixtures-"))
     cases_run, failures = [], []
+
+    # Every fixture case runs the checker against the REAL matrix, so the checker
+    # validates all 201 rows — each of which cites a focused test class. Supplying
+    # a synthetic result for every cited class makes the harness independent of
+    # whether the Kotlin suite has been run in this working tree, which is what
+    # previously broke it in CI: the mission-gates job runs no tests, so
+    # app/build/test-results does not exist and every row reported "no fresh XML
+    # results", masking the specific defect each case was built to expose.
+    # The real suite's own output is never under test here — only the checker's
+    # handling of a defective matrix.
+    def baseline_results():
+        dest = tmp_root / "baseline-results"
+        dest.mkdir(parents=True, exist_ok=True)
+        suites = {}
+        for cls, meth in re.findall(r"\b([A-Z][A-Za-z0-9_]*)\.([a-zA-Z][A-Za-z0-9_]*)\(", base_matrix):
+            suites.setdefault(cls, set()).add(meth)
+        # Use qualified filenames matching the checker's *.ClassName.xml lookup,
+        # and retain every cited method instead of overwriting each class's suite.
+        for cls, methods in suites.items():
+            qualified = "fixture." + cls
+            suite = ET.Element("testsuite", name=qualified, tests=str(len(methods)),
+                               failures="0", errors="0", skipped="0")
+            for meth in sorted(methods):
+                ET.SubElement(suite, "testcase", name=meth, classname=qualified, time="0.001")
+            path = dest / f"TEST-{qualified}.xml"
+            ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+            # Fixture-only timestamps isolate freshness from checkout timestamps.
+            far_future = time.time() + 86400
+            os.utime(path, (far_future, far_future))
+        return dest
+
+    real_results = baseline_results()
 
     def matrix_with(mutation):
         lines = base_matrix.splitlines()
@@ -554,24 +599,40 @@ def run_negative_harness():
         row = re.sub(r"KnowledgeTest\.[a-zA-Z]+\(", "KnowledgeTest.noSuchMethod(", knowledge_row, count=1)
         return add_row(row), None, None
 
+    # Fixture results must be SELF-CONTAINED. These cases used to mutate a real
+    # *KnowledgeTest.xml out of app/build/test-results, which meant the harness
+    # only worked if the test suite had already been run in the same working tree.
+    # In CI the mission-gates job runs no tests, so the glob was empty and
+    # `next(...)` raised StopIteration, crashing the self-test with a traceback
+    # instead of a verdict. Synthesise the XML instead: the harness is testing the
+    # checker's PARSING of a defective result, not the real suite's output.
+    KNOWLEDGE_CLS = "co.sanaa.agent.core.knowledge.KnowledgeTest"
+    KNOWLEDGE_METH = "factsRequireProvenance"
+
+    def synthetic_results(dest, *, failures=0, mtime=None):
+        dest.mkdir(parents=True, exist_ok=True)
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<testsuite name="{KNOWLEDGE_CLS}" tests="1" failures="{failures}" errors="0" skipped="0">\n'
+            f'  <testcase name="{KNOWLEDGE_METH}" classname="{KNOWLEDGE_CLS}" time="0.001"/>\n'
+            '</testsuite>\n'
+        )
+        path = dest / f"TEST-{KNOWLEDGE_CLS}.xml"
+        path.write_text(xml)
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
+        return dest
+
     def case_missing_xml(tmp):
         empty_dir = tmp / "empty-results"; empty_dir.mkdir(parents=True, exist_ok=True)
         return add_row(knowledge_row), empty_dir, None
 
     def case_failed_xml(tmp):
-        res = tmp / "failed-results"; res.mkdir(parents=True, exist_ok=True)
-        src_xml = next(real_results.glob("*KnowledgeTest.xml"))
-        doctored = src_xml.read_text().replace('failures="0"', 'failures="1"', 1)
-        (res / src_xml.name).write_text(doctored)
+        res = synthetic_results(tmp / "failed-results", failures=1)
         return add_row(knowledge_row), res, None
 
     def case_stale_xml(tmp):
-        res = tmp / "stale-results"; res.mkdir(parents=True, exist_ok=True)
-        src_xml = next(real_results.glob("*KnowledgeTest.xml"))
-        target = res / src_xml.name
-        shutil.copy(src_xml, target)
-        old = 0  # epoch: older than any source
-        os.utime(target, (old, old))
+        res = synthetic_results(tmp / "stale-results", mtime=0)  # epoch: older than any source
         return add_row(knowledge_row), res, None
 
     def case_unknown_prereq():
