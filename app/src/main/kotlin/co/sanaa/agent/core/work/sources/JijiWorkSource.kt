@@ -36,7 +36,7 @@ class JijiWorkSource(
                 dedupeKey = scrapeKey,
                 domain = Domain.INTERNAL,
                 kind = WorkKind.JIJI_SCRAPE,
-                payload = org.json.JSONObject().put("category", "Printers & Scanners"),
+                payload = org.json.JSONObject().put("catalogue_research", true),
                 // Keep the default discovery score above the loop's execution floor.
                 // At 180 seconds and the conservative 0.5 cold-start success rate,
                 // 150 UGX scored 25 and could therefore starve forever.

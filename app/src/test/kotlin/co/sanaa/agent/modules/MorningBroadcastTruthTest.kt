@@ -97,6 +97,7 @@ class MorningBroadcastTruthTest {
                 path.contains("/soko/listings") -> MockResponse()
                     .setHeader("Content-Type", "application/json")
                     .setBody("""{"shop_identity":{"seller_id":12,"shop_id":34},"data":[$listingsJson]}""")
+                path.contains("/soko/services") -> MockResponse().setBody("""{"shop_identity":{"seller_id":12,"shop_id":34},"data":[]}""")
                 else -> MockResponse().setResponseCode(200).setBody("{}")
             }
         }
@@ -149,7 +150,7 @@ class MorningBroadcastTruthTest {
         assertTrue(summary.contains("already posted"))
         assertFalse(summary.contains("newly sent"))
         // History advanced for non-failed work.
-        assertEquals("L1", state.string("last_broadcast_ids"))
+        assertEquals("L1", state.string("broadcast_rotation:12:34"))
         // Success title kept, but only the summary distinguishes suppression from sending.
         assertTrue(notificationTitles().any { it == "Morning done ✅" })
         // No failure records: duplicate suppression counts toward neither success nor failure.
@@ -171,7 +172,7 @@ class MorningBroadcastTruthTest {
         // The failed leg carries a concrete honest reason for the failure instead of
         // pretending success; the exact wording tracks the on-device failure mode.
         assertTrue((statusLeg?.get("detail") as? String).orEmpty().isNotBlank())
-        assertEquals("", state.string("last_broadcast_ids"))
+        assertEquals("", state.string("broadcast_rotation:12:34"))
         assertFalse(notificationTitles().any { it.contains("✅") })
         assertTrue(notificationTitles().any { it == "Morning broadcast needs attention" })
         val failures = memory.recentFailures().filter { it.stage == "broadcast" && it.stepId == "status" }

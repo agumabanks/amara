@@ -10,9 +10,16 @@ import org.json.JSONObject
  * ChatStore — stores full chat transcripts locally.
  * This is the key to making Amara remember conversations without heavy accessibility work.
  * Every message is stored as text. She can read her own memory.
+ *
+ * Version 2 adds durable long-term memory: every observed inbound and verified outbound
+ * message also becomes a [chat_events] row with a stable event identity, original message
+ * time versus observation time, provenance and delivery state. Notification re-delivery,
+ * repeated screen reads and restart recovery deduplicate on that identity. Recall after
+ * days, weeks or hundreds of messages combines recent turns, the rolling summary and
+ * keyword-matched older evidence under a bounded prompt budget.
  */
-class ChatStore(context: Context) : SQLiteOpenHelper(context, "amara_chats.db", null, 1) {
-    
+class ChatStore(context: Context) : SQLiteOpenHelper(context, "amara_chats.db", null, 2) {
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS chats (
@@ -25,7 +32,7 @@ class ChatStore(context: Context) : SQLiteOpenHelper(context, "amara_chats.db", 
             )
         """)
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_chats_key_time ON chats(chat_key, timestamp)")
-        
+
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS chat_summaries (
                 chat_key TEXT PRIMARY KEY,
@@ -35,7 +42,7 @@ class ChatStore(context: Context) : SQLiteOpenHelper(context, "amara_chats.db", 
                 message_count INTEGER DEFAULT 0
             )
         """)
-        
+
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS offerings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,21 +58,100 @@ class ChatStore(context: Context) : SQLiteOpenHelper(context, "amara_chats.db", 
                 synced_at INTEGER
             )
         """)
+        createChatEvents(db)
     }
-    
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
-    
+
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            createChatEvents(db)
+            backfillChatEvents(db)
+        }
+    }
+
+    private fun createChatEvents(db: SQLiteDatabase) {
+        // Stable event identity: notification re-delivery, repeated screen reads and
+        // restart recovery of the same logical message deduplicate on this key.
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS chat_events (
+                event_id TEXT PRIMARY KEY,
+                chat_key TEXT NOT NULL,
+                platform TEXT NOT NULL DEFAULT 'whatsapp',
+                account TEXT NOT NULL DEFAULT '',
+                speaker TEXT NOT NULL,
+                direction TEXT NOT NULL CHECK(direction IN ('sent','received')),
+                message_text TEXT NOT NULL,
+                original_at INTEGER NOT NULL,
+                observed_at INTEGER NOT NULL,
+                provenance TEXT NOT NULL DEFAULT '',
+                delivery_state TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_chat_events_time ON chat_events(chat_key, original_at)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_chat_events_original ON chat_events(original_at)")
+    }
+
+    /**
+     * Conservative migration of existing transcripts: legacy rows keep their original
+     * chat_key and timestamp as identity, marked with a legacy provenance. Ambiguity is
+     * quarantined by never merging people or keys — each row becomes exactly one event.
+     */
+    private fun backfillChatEvents(db: SQLiteDatabase) {
+        run {
+            val cursor = db.rawQuery(
+                "SELECT chat_key, sender, direction, message_text, timestamp, platform FROM chats ORDER BY timestamp ASC",
+                null,
+            )
+            cursor.use {
+                while (it.moveToNext()) {
+                    val chatKey = it.getString(0)
+                    val sender = it.getString(1)
+                    val direction = it.getString(2)
+                    val message = it.getString(3)
+                    val timestamp = it.getLong(4)
+                    val platform = it.getString(5) ?: "whatsapp"
+                    val eventId = eventId(chatKey, sender, message, timestamp)
+                    db.execSQL(
+                        "INSERT OR IGNORE INTO chat_events(event_id, chat_key, platform, account, speaker, direction, message_text, original_at, observed_at, provenance, delivery_state) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                        arrayOf(eventId, chatKey, platform, "", sender, direction, message, timestamp, timestamp, PROVENANCE_LEGACY, if (direction == "sent") "legacy" else ""),
+                    )
+                }
+            }
+        }
+    }
+
+    override fun onConfigure(db: SQLiteDatabase) {
+        // Bounded growth: long-term events older than the retention window are pruned
+        // on write; the rolling `chats` table keeps its existing behavior.
+    }
+
     /**
      * Store a message and update the chat summary atomically.
      * Uses a transaction to ensure chats and chat_summaries stay in sync.
      */
-    fun storeMessage(chatKey: String, sender: String, direction: String, message: String, platform: String = "whatsapp") {
+    fun storeMessage(chatKey: String, sender: String, direction: String, message: String,
+                     platform: String = "whatsapp", originalAt: Long = System.currentTimeMillis()) {
         val db = writableDatabase
         db.beginTransaction()
         try {
+            val observedAt = System.currentTimeMillis()
+            val inserted = db.insertWithOnConflict("chat_events", null, android.content.ContentValues().apply {
+                put("event_id", eventId(chatKey, sender, message, originalAt))
+                put("chat_key", chatKey); put("platform", platform); put("account", "")
+                put("speaker", sender); put("direction", direction); put("message_text", message)
+                put("original_at", originalAt); put("observed_at", observedAt)
+                put("provenance", if (direction == "sent") PROVENANCE_SEND else PROVENANCE_NOTIFICATION)
+                put("delivery_state", if (direction == "sent") "verified" else "")
+            }, SQLiteDatabase.CONFLICT_IGNORE)
+            // The durable event is the identity authority. A repeated notification,
+            // screen read or restart recovery must not inflate the legacy transcript
+            // or summary count either.
+            if (inserted == -1L) {
+                db.setTransactionSuccessful()
+                return
+            }
             db.execSQL(
                 "INSERT INTO chats(chat_key, sender, direction, message_text, timestamp, platform) VALUES(?,?,?,?,?,?)",
-                arrayOf(chatKey, sender, direction, message, System.currentTimeMillis().toString(), platform)
+                arrayOf(chatKey, sender, direction, message, originalAt.toString(), platform)
             )
             db.execSQL(
                 "INSERT OR REPLACE INTO chat_summaries(chat_key, summary, stage, last_activity, message_count) " +
@@ -79,8 +165,169 @@ class ChatStore(context: Context) : SQLiteOpenHelper(context, "amara_chats.db", 
             db.endTransaction()
         }
     }
+
+    /**
+     * Record an observed message as a durable long-term event. A stable event identity
+     * deduplicates notification re-delivery, repeated screen reads and restart recovery;
+     * original message time is kept separately from observation time. A generated draft
+     * is never recorded here as a sent message — outbound events are recorded only after
+     * verified dispatch, with the delivery state carried alongside.
+     */
+    fun recordEvent(chatKey: String, speaker: String, direction: String, message: String,
+                    originalAt: Long = System.currentTimeMillis(), observedAt: Long = System.currentTimeMillis(),
+                    platform: String = "whatsapp", account: String = "",
+                    provenance: String = PROVENANCE_NOTIFICATION, deliveryState: String = "") {
+        if (chatKey.isBlank() || message.isBlank() || speaker.isBlank()) return
+        if (direction !in setOf("sent", "received")) return
+        // Drafts and uncertain outbound effects belong in the side-effect ledger, not
+        // conversational memory. Only target-bound verified sends may become a fact
+        // that later replies treat as something Amara actually said.
+        if (direction == "sent" && deliveryState != "verified") return
+        val id = eventId(chatKey, speaker, message, originalAt)
+        writableDatabase.execSQL(
+            "INSERT OR IGNORE INTO chat_events(event_id, chat_key, platform, account, speaker, direction, message_text, original_at, observed_at, provenance, delivery_state) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            arrayOf(id, chatKey, platform, account.take(120), speaker, direction, message, originalAt, observedAt, provenance.take(40), deliveryState.take(40)),
+        )
+    }
+
+    /** Mark a previously-observed outbound event's delivery state (verified/uncertain). */
+    fun markEventDelivery(chatKey: String, speaker: String, message: String, originalAt: Long, deliveryState: String) {
+        val id = eventId(chatKey, speaker, message, originalAt)
+        writableDatabase.execSQL(
+            "UPDATE chat_events SET delivery_state = ? WHERE event_id = ? AND direction = 'sent'",
+            arrayOf(deliveryState.take(40), id),
+        )
+    }
+
+    fun eventCount(chatKey: String): Int = readableDatabase.rawQuery(
+        "SELECT COUNT(*) FROM chat_events WHERE chat_key = ?", arrayOf(chatKey),
+    ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    internal fun messageCount(chatKey: String): Int = readableDatabase.rawQuery(
+        "SELECT message_count FROM chat_summaries WHERE chat_key = ?", arrayOf(chatKey),
+    ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    /**
+     * Recent turns of any age — the two-day window does not apply here. This is the
+     * recent-turn layer of bounded long-term recall.
+     */
+    fun getRecentTurns(chatKey: String, limit: Int = 12): List<ChatMessage> {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT speaker, direction, message_text, original_at FROM chat_events WHERE chat_key = ? ORDER BY original_at DESC LIMIT ?",
+            arrayOf(chatKey, limit.coerceIn(1, 100).toString()),
+        )
+        val messages = mutableListOf<ChatMessage>()
+        while (cursor.moveToNext()) {
+            messages.add(ChatMessage(cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getLong(3)))
+        }
+        cursor.close()
+        return messages.reversed()
+    }
+
+    /**
+     * Bounded long-term recall for a reply prompt: recent turns of any age, the rolling
+     * summary, and keyword-matched older evidence under a character budget. Never passes
+     * the full database to the model; original source references are preserved so
+     * omissions and contradictions can be corrected.
+     */
+    fun recallContext(chatKey: String, summary: String?, budgetChars: Int = 4_000): String {
+        val sections = mutableListOf<String>()
+        summary?.takeIf { it.isNotBlank() }?.let { sections += "CONVERSATION SUMMARY: ${it.take(2_000)}" }
+        val recent = getRecentTurns(chatKey, RECENT_TURNS_LIMIT)
+        if (recent.isNotEmpty()) {
+            sections += recent.joinToString("\n") { "${it.sender} (${it.direction}): ${it.text}" }
+        }
+        val older = recallOlderEvidence(chatKey, summary, recent,
+            (budgetChars - sections.sumOf { it.length }).coerceAtLeast(0))
+        if (older.isNotEmpty()) sections += older
+        if (sections.isEmpty()) return "No previous conversation."
+        return sections.joinToString("\n\n").take(budgetChars)
+    }
+
+    /**
+     * Keyword-matched older evidence for the reply prompt: messages older than the
+     * recent turns that match the summary's and recent turns' topic words, oldest-first,
+     * with original message times, under a bounded character budget.
+     */
+    fun recallOlderEvidence(chatKey: String, summary: String?, recent: List<ChatMessage>,
+                            budgetChars: Int = 1_500): String {
+        if (budgetChars <= 200 || recent.isEmpty()) return ""
+        val keywords = (keywordSet(summary) + keywordSet(recent.joinToString(" ") { it.text })).take(8)
+        if (keywords.isEmpty()) return ""
+        val likeClause = keywords.joinToString(" OR ") { "message_text LIKE ?" }
+        val args = buildList {
+            add(chatKey); add(recent.first().timestamp.toString())
+            keywords.forEach { add("%$it%") }
+        }
+        readableDatabase.rawQuery(
+            "SELECT speaker, direction, message_text, original_at FROM chat_events " +
+                "WHERE chat_key = ? AND original_at < ? AND ($likeClause) " +
+                "ORDER BY original_at ASC LIMIT 12",
+            args.toTypedArray(),
+        ).use { cursor ->
+            val older = mutableListOf<String>()
+            while (cursor.moveToNext() && older.sumOf { it.length } < budgetChars) {
+                older.add("${cursor.getString(0)} (${cursor.getString(1)}, ${cursor.getLong(3)}): ${cursor.getString(2)}")
+            }
+            if (older.isEmpty()) return ""
+            return "EARLIER EVIDENCE (with original message times):\n" + older.joinToString("\n")
+        }
+    }
+
+    private fun keywordSet(text: String?): Set<String> {
+        val value = text ?: return emptySet()
+        return Regex("[\\p{L}\\p{Nd}]{4,}").findAll(value)
+            .map { it.value.lowercase() }
+            .filter { it !in STOPWORDS }
+            .toSet()
+    }
+
+    /** Owner-visible memory inspection for one conversation, newest first. */
+    fun chatEvents(chatKey: String, limit: Int = 100): List<Map<String, Any>> =
+        readableDatabase.rawQuery(
+            "SELECT event_id, speaker, direction, message_text, original_at, observed_at, provenance, delivery_state " +
+                "FROM chat_events WHERE chat_key = ? ORDER BY original_at DESC LIMIT ?",
+            arrayOf(chatKey, limit.coerceIn(1, 500).toString()),
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(mapOf(
+                    "event_id" to cursor.getString(0),
+                    "speaker" to cursor.getString(1),
+                    "direction" to cursor.getString(2),
+                    "message_text" to cursor.getString(3),
+                    "original_at" to cursor.getLong(4),
+                    "observed_at" to cursor.getLong(5),
+                    "provenance" to cursor.getString(6),
+                    "delivery_state" to cursor.getString(7),
+                ))
+            }
+        }
+
+    /** Owner deletion control: removes long-term events for one conversation. */
+    fun deleteChatEvents(chatKey: String): Int {
+        val count = eventCount(chatKey)
+        writableDatabase.execSQL("DELETE FROM chat_events WHERE chat_key = ?", arrayOf(chatKey))
+        return count
+    }
+
     
     fun getChatHistory(chatKey: String, limit: Int = 50): List<ChatMessage> {
+        // Long-term recall path: durable chat events of any age (not just the last two
+        // days). The rolling two-day window remains available via getRecentChatHistory.
+        val cursor = readableDatabase.rawQuery(
+            "SELECT speaker, direction, message_text, original_at FROM chat_events WHERE chat_key = ? ORDER BY original_at DESC LIMIT ?",
+            arrayOf(chatKey, limit.coerceIn(1, 200).toString()),
+        )
+        val messages = mutableListOf<ChatMessage>()
+        while (cursor.moveToNext()) {
+            messages.add(ChatMessage(cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getLong(3)))
+        }
+        cursor.close()
+        return messages.reversed()
+    }
+
+    /** The original recent-window history (last two days), preserved for compatibility. */
+    fun getRecentChatHistory(chatKey: String, limit: Int = 50): List<ChatMessage> {
         val cursor = readableDatabase.rawQuery(
             "SELECT sender, direction, message_text, timestamp FROM chats WHERE chat_key = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
             arrayOf(chatKey, (System.currentTimeMillis() - 2 * 86_400_000L).toString(), limit.coerceIn(1, 200).toString())
@@ -280,6 +527,27 @@ class ChatStore(context: Context) : SQLiteOpenHelper(context, "amara_chats.db", 
         }
         cursor.close()
         return items
+    }
+
+    companion object {
+        const val PROVENANCE_NOTIFICATION = "notification"
+        const val PROVENANCE_SCREEN_READ = "screen_read"
+        const val PROVENANCE_RESTART_RECOVERY = "restart_recovery"
+        const val PROVENANCE_SEND = "send"
+        const val PROVENANCE_LEGACY = "legacy_import"
+        const val RECENT_TURNS_LIMIT = 12
+
+        private val STOPWORDS = setOf(
+            "this", "that", "with", "have", "have", "will", "your", "from", "they", "been",
+            "were", "what", "when", "would", "could", "should", "there", "their", "about",
+            "which", "please", "thanks", "hello", "okay", "want", "need", "know", "like",
+        )
+
+        /** Stable event identity: the same logical message always hashes to the same key. */
+        fun eventId(chatKey: String, speaker: String, message: String, originalAt: Long): String {
+            val normalized = "${chatKey.trim().lowercase()}|$speaker|$message|$originalAt"
+            return co.sanaa.agent.core.ContentHashing.hash(normalized)
+        }
     }
 }
 

@@ -3,6 +3,8 @@ package co.sanaa.agent.api
 import co.sanaa.agent.core.SecureConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
@@ -14,7 +16,7 @@ import java.util.concurrent.TimeUnit
  * It never calls the Soko API and intentionally exposes no database write path.
  */
 class SokoApiClient(private val config: SecureConfig, private val identity: () -> co.sanaa.agent.core.TerminalShopIdentity = { error("Verified Terminal identity is required") }) {
-    private val client = OkHttpClient.Builder().dns(BackendDns.forUrl { config.backendUrl }).connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+    private val client = OkHttpClient.Builder().dns(BackendDns.forUrl { config.backendUrl }).connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).callTimeout(45, TimeUnit.SECONDS).build()
 
     /** Explicit owner diagnostic; makes no change and does not resume automation. */
     suspend fun inspectTerminalShop(): Map<String, Any> {
@@ -36,7 +38,14 @@ class SokoApiClient(private val config: SecureConfig, private val identity: () -
     }
 
     /** Products and services share rotation, but preserve distinct IDs and routes. */
-    suspend fun promotableOfferings(): List<SokoListing> = activeListings() + publishedServices().map { service ->
+    suspend fun promotableOfferings(): List<SokoListing> {
+        val scope = identity().scope
+        val products = activeListings()
+        val services = publishedServices()
+        check(identity().scope == scope && (products.map { it.raw } + services).all { it.optString("shop_scope") == scope }) {
+            "Terminal shop changed between products and services; combined catalogue discarded"
+        }
+        return products + services.map { service ->
         SokoListing(
             id = "service:${service.getString("id")}", title = service.getString("title"),
             description = service.optString("description", service.optString("summary")),
@@ -46,6 +55,8 @@ class SokoApiClient(private val config: SecureConfig, private val identity: () -
             imageUrl = service.optString("image_url").takeIf { it.isNotBlank() && it != "null" },
             raw = JSONObject(service.toString()).put("offering_type", "SERVICE"),
         )
+    }
+
     }
 
     /** Same-shop context only; these are not competitor observations. */
@@ -80,21 +91,35 @@ class SokoApiClient(private val config: SecureConfig, private val identity: () -
             throw IllegalStateException("Agent is not registered")
         }
         val shop = identity()
-        val url = "${config.backendUrl.trimEnd('/')}/soko/$resource?device_id=${config.deviceId}"
+        val collected = mutableListOf<JSONObject>()
+        var afterId = 0L
+        do {
+        currentCoroutineContext().ensureActive()
+        check(manualInspection || config.ownerAllowsWork()) { "Amara is off by owner request" }
+        val pageIdentity = identity()
+        check(pageIdentity.scope == shop.scope) { "Terminal shop changed during catalogue pagination" }
+        val url = "${config.backendUrl.trimEnd('/')}/soko/$resource?device_id=${config.deviceId}&after_id=$afterId"
         val request = Request.Builder().url(url).get()
             .header("Authorization", "Bearer ${config.agentToken}")
             .header("Accept", "application/json")
-            .header("X-Terminal-Identity", shop.assertion)
+            .header("X-Terminal-Identity", pageIdentity.assertion)
             .build()
         client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
+            currentCoroutineContext().ensureActive()
+            if (response.code == 429) throw SokoRateLimited(SokoRateLimited.delayMs(response.header("Retry-After")))
             if (!response.isSuccessful) throw IllegalStateException("Soko database bridge returned HTTP ${response.code}")
             val responseJson=JSONObject(body)
             val confirmed=responseJson.getJSONObject("shop_identity")
             check(confirmed.getLong("seller_id")==shop.sellerId && confirmed.getLong("shop_id")==shop.shopId && identity().scope==shop.scope) { "Terminal shop changed during the request; old content discarded" }
             val array = responseJson.optJSONArray("data") ?: JSONArray()
-            (0 until array.length()).mapNotNull { array.optJSONObject(it)?.put("shop_scope",shop.scope)?.put("shop_name",shop.name) }
+            collected += (0 until array.length()).mapNotNull { array.optJSONObject(it)?.put("shop_scope",shop.scope)?.put("shop_name",shop.name) }
+            val next = if (responseJson.isNull("next_after_id")) 0L else responseJson.optLong("next_after_id")
+            check(next == 0L || (next > afterId && array.length() > 0)) { "Catalogue pagination did not advance" }
+            afterId = next
         }
+        } while (afterId > 0L)
+        collected.distinctBy { it.optString("id").ifBlank { it.toString() } }
     }
 
     private fun parseListing(json: JSONObject?): SokoListing? {

@@ -127,6 +127,7 @@
                 <action android:name="co.sanaa.agent.action.TEST_WORK_LOOP_WAKE" />
                 <action android:name="co.sanaa.agent.action.TEST_TIKTOK_SOKO_PREPARE" />
                 <action android:name="co.sanaa.agent.action.TEST_TIKTOK_SOKO_POST" />
+                <action android:name="co.sanaa.agent.action.CLEAR_PREUPDATE_TIKTOK_BREAKERS" />
             </intent-filter>
         </receiver>
 

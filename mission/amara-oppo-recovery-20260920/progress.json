@@ -1,5 +1,5 @@
 {
-  "updated": "2026-09-20",
+  "updated": "2026-09-21",
   "target_release": "0.10.26 (39)",
   "items": [
     {
@@ -29,8 +29,8 @@
     {
       "id": "shorts_publication",
       "status": "pending",
-      "evidence": "artifacts/continuation39-oppo/latest.jsonl",
-      "next": "20 held and 1 pending preserved. OPPO observed Off; awaiting owner clarification before resuming. No exact-source YouTube publication established."
+      "evidence": "artifacts/continuation39-oppo/shorts-outcome.jsonl",
+      "next": "Release39 authorized task reached ACTING then FAILED before dispatch. YouTube blank/null-root inspection blocked exact guard diagnosis; final Amara On. No upload verified."
     },
     {
       "id": "accessibility_prompt",
@@ -92,5 +92,12 @@
       "evidence": "artifacts/tiktok-health-20260920/oppo-certificate39.txt",
       "next": "Both phones installed with matching ce4453cf\u2026 bytes and healthy service certificates; live Shorts acceptance pending."
     }
-  ]
+  ],
+  "superseded_by": "../amara-memory-receipts-followups-20260921/progress.json",
+  "release": {
+    "version_name": "0.10.36",
+    "version_code": 49,
+    "sha256": "b6b4c923fa5e8dd3692318f83923c9ffafc394dab3f980b2c4a46c0362fb99d9"
+  },
+  "updated_at": "2026-09-21T23:45:00+02:00"
 }

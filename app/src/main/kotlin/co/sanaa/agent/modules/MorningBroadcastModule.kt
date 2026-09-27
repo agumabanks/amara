@@ -46,8 +46,24 @@ class MorningBroadcastModule(
 ) {
     suspend fun run(): ModuleResult {
         return try {
-        val previous = state.string("last_broadcast_ids").split(',').filter(String::isNotBlank).toSet()
-        val listings = soko.activeListings().sortedByDescending { it.viewCount }.filterNot { it.id in previous }.take(3)
+        val offerings = soko.promotableOfferings()
+        val scope = offerings.firstOrNull()?.raw?.optString("shop_scope").orEmpty()
+        if (scope.isBlank()) return fail(memory, "Verified shop catalogue is unavailable")
+        val historyKey = "broadcast_rotation:$scope"
+        val previous = state.string(historyKey).split(',').filter(String::isNotBlank)
+        val history = previous.map { id -> co.sanaa.agent.core.growth.GrowthStore.Promotion(id,
+            if (id.startsWith("service:")) "SERVICE" else "PRODUCT") }.toMutableList()
+        val listings = buildList<co.sanaa.agent.api.SokoListing> {
+            repeat(3) {
+                val selected = co.sanaa.agent.core.growth.GrowthStore.select(
+                    offerings.filter { candidate -> none { it.id == candidate.id } }, history, requireMedia = false)
+                if (selected != null) {
+                    add(selected)
+                    history.add(0, co.sanaa.agent.core.growth.GrowthStore.Promotion(selected.id,
+                        co.sanaa.agent.core.growth.GrowthStore.typeOf(selected)))
+                }
+            }
+        }
         if (listings.isEmpty()) return fail(memory, "No eligible active Soko listings were returned")
         val today = LocalDate.now()
         // Retrieved listing data is untrusted document content inside the prompt.
@@ -154,7 +170,7 @@ class MorningBroadcastModule(
         // Featured-listing history only advances for work that did not fail outright;
         // failed broadcasts must be retried against the same listings next run.
         if (overall != Overall.FAILED) {
-            state.putString("last_broadcast_ids", listings.joinToString(",") { it.id })
+            state.putString(historyKey, (listings.map { it.id } + previous).distinct().joinToString(","))
         }
         if (overall == Overall.VERIFIED) state.success(NAME) else state.failure(NAME, summaryOf(legs, overall))
         val summary = summaryOf(legs, overall)

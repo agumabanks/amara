@@ -22,6 +22,15 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class RevenueStoreTest {
+    @Test fun largeCataloguePolicyPreservesTimezoneAndEveryAllowedOffering() {
+        val policy = CommercialPolicy(ownerTimeZoneId = "Africa/Kampala",
+            allowedProducts = (1..2500).map { "offering-$it" }.toSet())
+        assertTrue(policy.toJson().length > 8000)
+        assertTrue(store.savePolicy(policy, 123L))
+        assertEquals(policy, store.loadPolicy())
+        assertFalse(store.savePolicy(policy.copy(permittedAudience = "x".repeat(1_048_576)), 124L))
+        assertEquals(policy, store.loadPolicy())
+    }
 
     private lateinit var memory: AmaraMemory
     private lateinit var store: RevenueStore

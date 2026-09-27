@@ -9,12 +9,15 @@ internal object TikTokImportWait {
         allowed: () -> Boolean,
         pause: suspend () -> Unit = { delay(500) },
         attempts: Int = 60,
+        transientPackage: String = "",
+        transientAttempts: Int = 12,
     ): Boolean {
-        repeat(attempts) {
+        repeat(attempts) { attempt ->
             if (!allowed()) return false
             when (observePackage()) {
                 TikTokSoundSelection.PACKAGE -> return true
                 "", "co.sanaa.agent" -> Unit
+                transientPackage -> if (transientPackage.isBlank() || attempt >= transientAttempts) return false
                 else -> return false
             }
             pause()

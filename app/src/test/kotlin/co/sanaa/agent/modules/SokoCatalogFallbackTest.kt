@@ -38,7 +38,7 @@ class SokoCatalogFallbackTest {
             }
             for (resource in listOf("listings", "services")) {
                 val request = server.takeRequest()
-                assertEquals("/agent/soko/$resource?device_id=test-device", request.path)
+                assertEquals("/agent/soko/$resource?device_id=test-device&after_id=0", request.path)
                 assertEquals("Bearer test-token", request.getHeader("Authorization"))
                 assertEquals("GET", request.method)
             }

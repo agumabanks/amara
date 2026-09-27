@@ -152,8 +152,12 @@ class ProductionPathIntegrationTest {
         // Enforcement happened BEFORE any model call: zero generation requests left.
         assertEquals(0, completionCalls.get())
         // A durable local security finding exists.
-        val findings = memory.openBusinessFindings()
-        assertTrue(findings.any { it.sourceApp == "security" && it.issue.contains("injection", ignoreCase = true) })
+        memory.readableDatabase.rawQuery(
+            "SELECT issue FROM business_findings WHERE source_app = 'security'", null,
+        ).use { c ->
+            assertTrue(c.moveToFirst())
+            assertTrue(c.getString(0).contains("injection", ignoreCase = true))
+        }
         // The owner handoff was attempted through the transaction ledger; without
         // accessibility it finalized FAILED — never a silent success claim.
         val cursor = memory.readableDatabase.rawQuery(

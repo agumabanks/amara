@@ -203,7 +203,7 @@ class GroqClient(
 
     private fun systemPrompt(jsonMode: Boolean): String {
         val context = BusinessContext(
-            config.agentName, config.businessName, "UGX ${config.orderThresholdUgx}",
+            config.agentName, memory?.currentVerifiedShopName() ?: "the currently verified shop", "UGX ${config.orderThresholdUgx}",
             memoryContext = runCatching { memory?.promptContext() }.getOrNull() ?: "No device memory available",
         )
         val base = SystemPromptBuilder.build(context)
@@ -228,24 +228,19 @@ class GroqClient(
      * [WireOutcome.Reply] or [WireOutcome.Failed]. Raw bodies are hashed, never
      * logged, never persisted, and never echoed back to the provider.
      */
-    private fun wireCall(key: String, body: JSONObject, stage: String): WireOutcome {
+    private suspend fun wireCall(key: String, body: JSONObject, stage: String): WireOutcome {
         check(config.ownerAllowsWork()) { "Amara is off by owner request" }
         val endpoint = trustedHttpsEndpoint(config.groqEndpoint)
         val request = Request.Builder().url(endpoint).header("Authorization", "Bearer $key")
             .post(body.toString().toRequestBody(JSON)).build()
         Log.i(TAG, "Model call: stage=$stage model=${body.optString("model")} requestBytes=${body.length()}")
-        val response = try {
-            client.newCall(request).execute()
+        val exchange = try {
+            cancellableExchange(client.newCall(request))
         } catch (error: IOException) {
             return WireOutcome.Failed(classifiedTransportFailure(error, stage))
         }
-        val outcome = response.use { resp ->
-            val rawBody = try {
-                resp.body?.string().orEmpty()
-            } catch (error: IOException) {
-                // Read timeouts surface while streaming the body, not at execute().
-                return@use WireOutcome.Failed(classifiedTransportFailure(error, stage))
-            }
+        val outcome = exchange.first.use { resp ->
+            val rawBody = exchange.second
             val hash = ModelGateway.sha256Hex(rawBody)
             val requestId = resp.header(REQUEST_ID_HEADER).orEmpty()
             Log.i(TAG, "Model response: code=${resp.code} bodyLength=${rawBody.length}")
@@ -302,7 +297,7 @@ class GroqClient(
      * or rejected credentials. A malformed request is never replayed under another
      * key, and key material is never logged.
      */
-    private fun wireCallWithFallback(primaryKey: String, body: JSONObject, stage: String): WireOutcome {
+    private suspend fun wireCallWithFallback(primaryKey: String, body: JSONObject, stage: String): WireOutcome {
         var outcome = wireCall(primaryKey, body, stage)
         for (fallbackKey in configuredKeys().filter { it != primaryKey }) {
             val retryableCredential = outcome is WireOutcome.Failed &&

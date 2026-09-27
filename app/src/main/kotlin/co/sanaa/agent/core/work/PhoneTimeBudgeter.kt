@@ -119,6 +119,7 @@ class PhoneTimeBudgeter(
     private val tikTokRemainingSeconds: () -> Int = { 0 },
     private val config: () -> Int = { 90 }, // max screen minutes per day
 ) {
+    private val batteryHold = BatteryWorkHold(context)
 
     /** Read-only budget evidence for the owner UI and durable deferment journal. */
     fun remainingDailySeconds(snapshot: WorldSnapshot): Int =
@@ -137,11 +138,15 @@ class PhoneTimeBudgeter(
      * Returns null if no session should be granted.
      */
     fun requestSession(snapshot: WorldSnapshot, bestItem: WorkItem): SessionGrant? {
+        if (batteryHold.observe(snapshot.batteryPercent)) return null
         val remainingSeconds = if (Capability.SCREEN !in bestItem.requires) 300 else if (bestItem.kind == WorkKind.TIKTOK_POST_PUBLISH)
             maxOf(remainingDailySeconds(snapshot), tikTokRemainingSeconds()) else remainingDailySeconds(snapshot)
         // Customer replies receive one small emergency session after the ordinary
         // daily budget is spent. SafetyGovernor accounts for this reserve durably.
         val inboundReserve = bestItem.kind == WorkKind.WA_REPLY_INBOUND && !bestItem.payload.optBoolean("manager_report") && remainingSeconds < 180
+        // Retain the daily-budget reserve boundary; shorter sessions only relax
+        // the thermal/battery slice floor, not the governor's daily allowance.
+        if (Capability.SCREEN in bestItem.requires && remainingSeconds < 180 && !inboundReserve) return null
 
         // Base slice by time of day
         val hour = snapshot.currentHour
@@ -175,8 +180,10 @@ class PhoneTimeBudgeter(
             if (Capability.SCREEN !in bestItem.requires) 300 else if (inboundReserve) 180 else remainingSeconds
         )
 
-        // Minimum 3 minutes to bother
-        if (sessionLengthSeconds < 180) return null
+        // Short work can fit a thermally reduced session. A fixed three-minute
+        // floor starves 45-second replies when warm + half battery yields 120s.
+        val minimumSession = bestItem.estimatedScreenSeconds.coerceIn(30, 180)
+        if (sessionLengthSeconds < minimumSession) return null
 
         // Don't grant if owner is active
         if (snapshot.ownerActive) return null
@@ -213,7 +220,7 @@ class PhoneTimeBudgeter(
 
     fun denialReason(snapshot: WorldSnapshot, item: WorkItem): String = when {
         snapshot.ownerActive -> "Phone is in use; waiting for the owner to finish"
-        snapshot.batteryPercent <= 15 -> "Battery at or below 15%; waiting for charge"
+        batteryHold.observe(snapshot.batteryPercent) -> "Battery work paused; charging must reach 20% before resuming"
         snapshot.thermalState == ThermalState.HOT && !item.payload.optBoolean("owner_canary") && !item.payload.optBoolean("owner_command") -> "Phone is too hot; waiting for it to cool"
         snapshot.quietHours && !item.payload.optBoolean("owner_always_on") &&
             (Capability.SCREEN in item.requires || Capability.CONSENT_TIER_2 in item.requires) -> "Quiet hours; scheduled screen work will resume afterwards"

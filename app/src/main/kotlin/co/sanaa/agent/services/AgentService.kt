@@ -10,9 +10,13 @@ import androidx.core.app.NotificationCompat
 import co.sanaa.agent.MainActivity
 import co.sanaa.agent.R
 import co.sanaa.agent.core.AgentRuntime
+import co.sanaa.agent.core.TerminalShopIdentity
 import co.sanaa.agent.core.RuntimePhase
 import co.sanaa.agent.core.RuntimeStatusBus
 import co.sanaa.agent.core.WorkStatus
+import co.sanaa.agent.core.knowledge.ConnectivityMonitor
+import co.sanaa.agent.core.work.WakeReason
+import co.sanaa.agent.core.work.WorkBlockers
 import co.sanaa.agent.notifications.NotificationReporter
 import co.sanaa.agent.overlay.OverlayService
 import co.sanaa.agent.permissions.PermissionStatus
@@ -24,6 +28,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 class AgentService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -53,10 +61,87 @@ class AgentService : Service() {
             val runtime = AgentRuntime.get(applicationContext).awaitReady()
             restoreDurableRuntimeStatus(runtime)
             AgentWorkScheduler.scheduleAll(applicationContext, runtime.config.broadcastTime)
+            scope.launch { monitorConnectivity(runtime) }
+            scope.launch { monitorTerminalShop(runtime) }
             runCatching { runtime.backend.registerAndSync() }
                 .onFailure { runtime.reporter.report("I couldn't sync my settings", "I'll retry shortly. ${it.message}", NotificationReporter.Priority.ACTION_NEEDED) }
             accessibilityWatchdog(runtime)
         }
+    }
+
+    /** Signed Terminal identity is the authority; a remembered shop name is never a fallback. */
+    private suspend fun monitorTerminalShop(runtime: AgentRuntime) {
+        val blockers = WorkBlockers(applicationContext)
+        var seenScope: String? = null
+        var reportedScope: String? = null
+        var identityUnavailable = false
+        while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+            val identity = try { TerminalShopIdentity.readFresh(applicationContext) }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { null }
+            if (identity == null) {
+                seenScope = null
+                reportedScope = null
+                if (!identityUnavailable) {
+                    blockers.flag("device:terminal_shop", "Soko Terminal shop",
+                        "The logged-in Terminal shop cannot be verified; shop content is waiting.",
+                        ownerAction = true,
+                        action = "Open Soko Terminal and sign in to the shop you want Amara to use.")
+                    identityUnavailable = true
+                }
+            } else {
+                if (identityUnavailable) blockers.clear("device:terminal_shop", "Current signed Terminal shop verified")
+                identityUnavailable = false
+                if (identity.scope != seenScope) {
+                    seenScope = identity.scope
+                    reportedScope = null
+                    runtime.workLoop.wake(WakeReason.ExternalEvent("terminal_shop_changed", ""))
+                }
+                if (identity.scope != reportedScope && runtime.config.configSyncEnabled &&
+                    runtime.config.ownerAllowsWork() && runtime.config.agentToken.isNotBlank()) {
+                    try {
+                        if (runtime.backend.observeTerminalShop(identity) &&
+                            TerminalShopIdentity.readFresh(applicationContext).scope == identity.scope) {
+                            reportedScope = identity.scope
+                            try { runtime.backend.syncEvents() }
+                            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                            catch (_: Exception) { /* Durable events remain queued for retry. */ }
+                        }
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (_: Exception) { /* Retry the signed observation on the next check. */ }
+                }
+            }
+            delay(30_000)
+        }
+    }
+
+    private suspend fun monitorConnectivity(runtime: AgentRuntime) {
+        val blockers = WorkBlockers(applicationContext)
+        var previous: ConnectivityMonitor.ConnectivityState? = null
+        runtime.connectivityMonitor.connectivityFlow()
+            .map { it.state }
+            .distinctUntilChanged()
+            .collectLatest { state ->
+                if (state == ConnectivityMonitor.ConnectivityState.ONLINE) {
+                    blockers.clear("device:internet", "Android reported a validated internet connection")
+                    try { runtime.backend.syncEvents() }
+                    catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (_: Exception) { /* Durable events remain queued for retry. */ }
+                    if (previous != null && previous != ConnectivityMonitor.ConnectivityState.ONLINE)
+                        runtime.workLoop.wake(WakeReason.NetworkRestored)
+                } else {
+                    // A new network can report LIMITED briefly before Android validates it.
+                    delay(5_000)
+                    blockers.flag("device:internet", "Internet connection",
+                        if (state == ConnectivityMonitor.ConnectivityState.OFFLINE)
+                            "This phone has no internet connection; network work is waiting."
+                        else "This phone's connection is limited; Android has not validated internet access.",
+                        ownerAction = true,
+                        action = "Restore a working Wi-Fi or mobile data connection. Network work resumes when Android validates it.",
+                        global = false)
+                }
+                previous = state
+            }
     }
 
     private fun startForegroundCompat(notification: android.app.Notification) {

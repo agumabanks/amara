@@ -4,8 +4,21 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import co.sanaa.agent.core.AmaraMemory
 import co.sanaa.agent.core.SecureConfig
+import co.sanaa.agent.core.TerminalShopIdentity
+import co.sanaa.agent.core.OwnerPower
+import co.sanaa.agent.core.work.AgentEventOutbox
+import co.sanaa.agent.core.work.Domain
+import co.sanaa.agent.core.work.WorkItem
+import co.sanaa.agent.core.work.WorkKind
+import co.sanaa.agent.core.work.WorkResult
+import co.sanaa.agent.core.work.WorkStatus
 import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.SocketPolicy
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -18,6 +31,7 @@ import org.json.JSONObject
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * Genuine network-boundary tests: every backend request payload is captured by a local
@@ -38,8 +52,13 @@ class DataEgressPayloadTest {
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         context.deleteDatabase(AmaraMemory.DATABASE_NAME)
+        context.deleteDatabase(AgentEventOutbox.DATABASE_NAME)
+        context.getSharedPreferences("amara_event_binding", 0).edit().clear().commit()
         memory = AmaraMemory(context)
         config = SecureConfig(context, useEncryptedPrefs = false)
+        config.telemetryOptIn = false
+        config.configSyncEnabled = true
+        OwnerPower(context).setOn(true)
         // Isolate from any real stored credentials.
         config.groqApiKey = ""
         config.agentToken = "test-agent-token"
@@ -53,7 +72,29 @@ class DataEgressPayloadTest {
 
     @After
     fun tearDown() {
+        backend.eventOutbox.close()
         server.shutdown()
+    }
+
+    @Test fun offlineWorkEventSurvivesFailureThenLeavesOnlyAfterServerAck() = runBlocking {
+        config.telemetryOptIn = true
+        val shop = TerminalShopIdentity(254, 24, "Free Line Stationery", Long.MAX_VALUE, "signed")
+        AgentEventOutbox(context) { shop }.use { outbox ->
+            outbox.bindShop(shop.scope, 1)
+            val item = WorkItem("private-contact:+256700000001", Domain.SOKO, WorkKind.SOKO_INVENTORY_CHECK,
+                baseValueKes = 1.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 1)
+            assertTrue(outbox.enqueueOutcome(WorkResult(item, WorkStatus.DONE)))
+        }
+        val eventId = backend.eventOutbox.pending().single().first
+        server.enqueue(MockResponse().setResponseCode(503))
+        assertTrue(runCatching { backend.syncEvents() }.isFailure)
+        assertEquals(1, backend.eventOutbox.pendingCount())
+        val first = server.takeRequest()
+        assertEquals("/api/agent/events", first.path)
+        assertFalse(first.body.readUtf8().contains("+256700000001"))
+        server.enqueue(MockResponse().setBody("""{"accepted":["$eventId"],"duplicates":[],"rejected":[]}"""))
+        assertEquals(1, backend.syncEvents())
+        assertEquals(0, backend.eventOutbox.pendingCount())
     }
 
     @Test fun logWithTelemetryOffSendsNothingAnywhere() = runBlocking {
@@ -76,6 +117,27 @@ class DataEgressPayloadTest {
         assertEquals("fallback-from-backend", config.groqApiKey2)
         val request = server.takeRequest()
         assertEquals("Bearer test-agent-token", request.getHeader("Authorization"))
+        assertTrue(request.getHeader("X-Amara-Request-ID")!!.matches(Regex("[0-9a-f-]{36}")))
+    }
+
+    @Test fun configHttp500HasSameSafeReferenceAsRequestHeader() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(500).setBody("internal details must stay hidden"))
+
+        val failure = runCatching { backend.fetchConfig() }.exceptionOrNull()
+        val requestId = server.takeRequest().getHeader("X-Amara-Request-ID")!!
+        assertTrue(failure is IllegalStateException)
+        assertTrue(failure!!.message!!.contains("reference $requestId"))
+        assertFalse(failure.message!!.contains("internal details"))
+        assertFalse(failure.message!!.contains("test-agent-token"))
+    }
+
+    @Test fun cancellingConfigSyncAbortsHeldHttpCallPromptly() = runBlocking {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val job = launch(Dispatchers.IO) { backend.fetchConfig() }
+        assertTrue(server.takeRequest(5, TimeUnit.SECONDS) != null)
+
+        withTimeout(2_500) { job.cancelAndJoin() }
+        assertTrue(job.isCancelled)
     }
 
     @Test fun optedInLogIsRedactedAndTruncatedBeforeExport() = runBlocking {
@@ -133,6 +195,43 @@ class DataEgressPayloadTest {
         assertTrue(runCatching { backend.fetchConfig() }.isFailure)
         assertTrue(runCatching { backend.status() }.isFailure)
         assertEquals(0, server.requestCount)
+    }
+
+    @Test fun heartbeatRequiresSeparateConsentAndExportsOnlyBoundedHealthFacts() = runBlocking {
+        val snapshot = mapOf<String, Any>(
+            "accessibilityBound" to true, "pendingWorkCount" to 7,
+            "batteryPercent" to 64, "charging" to false,
+            "blockers" to listOf("Private customer conversation"),
+        )
+        assertFalse(backend.heartbeat(snapshot))
+        assertEquals(0, server.requestCount)
+
+        config.operationalReportingEnabled = true
+        server.enqueue(MockResponse().setResponseCode(201).setBody("{\"received\":true}"))
+        assertTrue(backend.heartbeat(snapshot))
+        val request = server.takeRequest()
+        assertEquals("/api/agent/heartbeat", request.path)
+        assertEquals("Bearer test-agent-token", request.getHeader("Authorization"))
+        val body = JSONObject(request.body.readUtf8())
+        assertEquals("test-device", body.getString("device_id"))
+        assertEquals(7, body.getInt("pending_tasks"))
+        assertEquals(64, body.getInt("battery_level"))
+        assertFalse(body.toString().contains("Private customer conversation"))
+        assertFalse(body.has("blockers"))
+    }
+
+    @Test fun shopObservationUsesOnlySignedIdentityAndMatchingDeviceCredential() = runBlocking {
+        val shop = TerminalShopIdentity(254, 24, "Current shop", System.currentTimeMillis() / 1000 + 90, "signed.shop-proof")
+        server.enqueue(MockResponse().setBody("""{"shop_identity":{"seller_id":254,"shop_id":24},"binding_revision":1}"""))
+        assertTrue(backend.observeTerminalShop(shop))
+        val request = server.takeRequest()
+        assertEquals("/api/agent/shop-observation", request.path)
+        assertEquals("signed.shop-proof", request.getHeader("X-Terminal-Identity"))
+        assertEquals("Bearer test-agent-token", request.getHeader("Authorization"))
+        assertEquals(setOf("device_id"), JSONObject(request.body.readUtf8()).keySet().toSet())
+        config.configSyncEnabled = false
+        assertFalse(backend.observeTerminalShop(shop))
+        assertEquals(1, server.requestCount)
     }
 
     @Test fun registrationPayloadCarriesOnlyIdentityFields() = runBlocking {

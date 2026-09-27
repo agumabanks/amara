@@ -12,7 +12,7 @@ enum class Domain { SOKO, TIKTOK, YOUTUBE, WHATSAPP, INTERNAL }
  */
 enum class WorkKind {
     // WhatsApp
-    WA_FOLLOWUP, WA_REPLY_INBOUND, WA_BROADCAST,
+    WA_FOLLOWUP, WA_REPLY_INBOUND, WA_BROADCAST, WA_MEETING_REMINDER,
     // Soko
     SOKO_AUDIT, SOKO_ORDER_CONFIRM, SOKO_RESTOCK_DRAFT, SOKO_PRICE_ADJUST, SOKO_INVENTORY_CHECK,
     // TikTok
@@ -79,6 +79,7 @@ data class FailureInfo(
     val klass: FailureClass,
     val summary: String,
     val recoverable: Boolean = true,
+    val retryAfterMs: Long? = null,
 )
 
 /**

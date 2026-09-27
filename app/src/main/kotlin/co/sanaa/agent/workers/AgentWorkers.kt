@@ -93,6 +93,14 @@ class FollowUpWorker(context: Context, params: WorkerParameters) : AgentWorker(c
         return Result.success()
     }
 }
+class MeetingReminderWakeWorker(context: Context, params: WorkerParameters) : AgentWorker(context, params) {
+    override suspend fun doWork(): Result {
+        runtime.awaitReady().workLoop.wake(
+            co.sanaa.agent.core.work.WakeReason.ExternalEvent("meeting_reminder_due", inputData.getString("commitment_id").orEmpty()),
+        )
+        return Result.success()
+    }
+}
 class HealthWorker(context: Context, params: WorkerParameters) : AgentWorker(context, params) {
     override suspend fun doWork(): Result {
         // Inspect independently of the queue we are monitoring, including offline.
@@ -148,6 +156,12 @@ object AgentWorkScheduler {
         // Daily commercial cycle: morning plan / during-day recheck / end-of-day brief,
         // phased by the OWNER-configured timezone with per-day occurrence keys.
         work.enqueueUniquePeriodicWork("agent_commercial_cycle", ExistingPeriodicWorkPolicy.UPDATE, periodic<CommercialCycleWorker>(4, TimeUnit.HOURS))
+        // Rebuild one-time wake requests after reboot or scheduler database recovery.
+        runCatching {
+            co.sanaa.agent.core.CommitmentStore(context).use { store ->
+                store.upcoming(limit = 50).forEach { scheduleMeetingReminder(context, it) }
+            }
+        }
         if (co.sanaa.agent.core.AgentRuntime.get(context).config.proactiveReadOnlyAudits) {
             work.enqueueUniquePeriodicWork("amara_read_only_shop_audit", ExistingPeriodicWorkPolicy.UPDATE, periodic<ReadOnlyShopAuditWorker>(6, TimeUnit.HOURS))
         } else {
@@ -172,6 +186,24 @@ object AgentWorkScheduler {
 
     fun cancelRecurring(context: Context, taskId: Long) {
         WorkManager.getInstance(context).cancelUniqueWork("amara_recurring_$taskId")
+    }
+
+    fun scheduleMeetingReminder(context: Context, commitment: co.sanaa.agent.core.Commitment) {
+        val name = "amara_meeting_reminder_${commitment.id}"
+        val manager = WorkManager.getInstance(context)
+        val dueAt = commitment.agreedAt - commitment.reminderLeadMinutes * 60_000L
+        if (commitment.confirmationStatus != co.sanaa.agent.core.CommitmentStore.Confirmation.AGREED ||
+            commitment.reminderRecipients != "customer" || dueAt <= 0 ||
+            commitment.agreedAt <= System.currentTimeMillis()) {
+            manager.cancelUniqueWork(name)
+            return
+        }
+        val request = OneTimeWorkRequestBuilder<MeetingReminderWakeWorker>()
+            .setInputData(workDataOf("commitment_id" to commitment.id))
+            .setInitialDelay((dueAt - System.currentTimeMillis()).coerceAtLeast(0), TimeUnit.MILLISECONDS)
+            .addTag("amara_meeting_reminder")
+            .build()
+        manager.enqueueUniqueWork(name, ExistingWorkPolicy.REPLACE, request)
     }
 
     /** Schedule the next governed TikTok opportunity at the owner's selected cadence. */

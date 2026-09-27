@@ -4,12 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TikTokProfileIdentityTest {
-    @Test fun currentProfileLabelsIdentifyOwnAccountWithoutResourceIds() {
-        assertEquals("@sanaamedia",TikTokProfileIdentity.handle(listOf("Sanaa media","Edit","@sanaamedia","Following","Followers","Likes")))
+    @Test fun ownerControlsAreCaseInsensitive() {
+        assertTrue(TikTokProfileIdentity.hasOwnerControls(listOf("Edit profile", "followers")))
+        assertTrue(TikTokProfileIdentity.hasOwnerControls(listOf("Business Suite", "Followers")))
+        assertFalse(TikTokProfileIdentity.hasOwnerControls(listOf("@mention", "Followers")))
     }
-    @Test fun visitorProfileAndAmbiguousHandlesAreRejected() {
-        assertNull(TikTokProfileIdentity.handle(listOf("@other","Follow","Followers")))
-        assertNull(TikTokProfileIdentity.handle(listOf("@one","@two","Edit","Followers")))
-        assertNull(TikTokProfileIdentity.handle(listOf("@one","Edit")))
+
+    @Test fun genericParserRejectsAmbiguousCaptionMentions() {
+        assertNull(TikTokProfileIdentity.handle(listOf("Edit", "Followers", "@owner", "@captionMention")))
+        assertEquals("@owner", TikTokProfileIdentity.handle(listOf("Edit", "Followers", "@owner")))
     }
 }

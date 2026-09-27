@@ -8,7 +8,7 @@ internal object BusinessChannelPolicy {
 
     fun shopBlocker(capability: String, inputs: Map<String, Any?>, scope: String): String? = when {
         scope.isBlank() || inputs["shop_scope"] != scope -> "This action is not bound to the currently logged-in Terminal shop. Old drafts and unscoped work remain held."
-        capability !in setOf(CapabilityIds.POST_YOUTUBE_SHORT, CapabilityIds.POST_TIKTOK, CapabilityIds.POST_TIKTOK_STORY, CapabilityIds.BROADCAST_GROUP_WHATSAPP, CapabilityIds.REPLY_WHATSAPP, CapabilityIds.APPLY_SOKO_EDIT) ->
+        capability !in setOf(CapabilityIds.TIKTOK_PUBLIC_COMMENT, CapabilityIds.POST_YOUTUBE_SHORT, CapabilityIds.POST_TIKTOK, CapabilityIds.POST_TIKTOK_STORY, CapabilityIds.BROADCAST_GROUP_WHATSAPP, CapabilityIds.REPLY_WHATSAPP, CapabilityIds.APPLY_SOKO_EDIT) ->
             "This channel needs shop-scoped memory and target verification before it can resume."
         else -> null
     }

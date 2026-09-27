@@ -12,7 +12,17 @@ data class TikTokProductContent(val imageUrl: String, val shoppingUrl: String, v
             return (listOf("#soko24")+listOf(ad.headline,ad.brand).map(::tag).filter { it.isNotBlank() }.map { "#$it" }+
                 ShopLocationHashtags.fromAddress(address).take(2)).distinctBy { it.lowercase() }.take(5)
         }
-        fun from(listing: SokoListing, publicWhatsApp: String = "", businessName: String = "Sanaa Media"): TikTokProductContent? {
+        private data class EligibleContent(val title: String, val media: String, val slug: String)
+        /** Catalogue eligibility must not generate copy or hash every candidate's description. */
+        fun isEligible(listing: SokoListing): Boolean = eligibleContent(listing) != null
+
+        fun shoppingUrl(listing: SokoListing): String? {
+            val content = eligibleContent(listing) ?: return null
+            val route = if (listing.raw.optString("offering_type") == "SERVICE") "service" else "product"
+            return "https://soko24.co/$route/${content.slug}"
+        }
+
+        private fun eligibleContent(listing: SokoListing): EligibleContent? {
             val title = listing.title.replace(Regex("\\s+"), " ").trim()
             val media = listing.imageUrl?.trim()?.takeIf { url ->
                 runCatching { URI(url).let { it.scheme in setOf("https", "http") && !it.host.isNullOrBlank() && it.userInfo == null } }.getOrDefault(false)
@@ -21,10 +31,15 @@ data class TikTokProductContent(val imageUrl: String, val shoppingUrl: String, v
             val slug = listing.raw.optString("slug").trim()
             if (listing.id.isBlank() || title.isBlank() || title.length > 300 ||
                 slug.isBlank() || slug == "null" || !slug.matches(Regex("[A-Za-z0-9_-]+"))) return null
+            return EligibleContent(title, media, slug)
+        }
+
+        fun from(listing: SokoListing, publicWhatsApp: String = "", businessName: String = "Sanaa Media", headline: String? = null): TikTokProductContent? {
+            val (title, media) = eligibleContent(listing) ?: return null
             val isService = listing.raw.optString("offering_type") == "SERVICE"
-            val shopping = "https://soko24.co/${if (isService) "service" else "product"}/$slug"
+            val shopping = shoppingUrl(listing) ?: return null
             // Factual copy avoids a generated description inventing a different product or offer.
-            val ad = AmaraAdSpec.from(listing, publicWhatsApp, businessName)
+            val ad = AmaraAdSpec.from(listing, publicWhatsApp, businessName, headline)
             val angle = AudienceAdCopy.angle(listing, listing.id.hashCode())
             val caption = buildString {
                 appendLine(angle.opening)

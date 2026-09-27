@@ -29,12 +29,21 @@ data class TerminalShopIdentity(val sellerId: Long, val shopId: Long, val name: 
             acknowledgeScope(context, refreshed, event = "terminal_identity_refreshed")
             return refreshed
         }
-        private fun acknowledgeScope(context: Context, identity: TerminalShopIdentity, event: String = "terminal_identity_observed") {
+        internal fun acknowledgeScope(context: Context, identity: TerminalShopIdentity, event: String = "terminal_identity_observed") {
             runCatching {
                 val prefs = context.getSharedPreferences("terminal_shop_identity", Context.MODE_PRIVATE)
                 val previous = prefs.getString("scope", null)
-                prefs.edit().putString("scope", identity.scope).putString("name", identity.name).commit()
-                EvaluationJournal(context).record(event, fields = JSONObject()
+                if (previous != identity.scope) {
+                    co.sanaa.agent.core.work.WorkQueue(context).use { it.quarantineOtherShopAds(identity.scope) }
+                }
+                val changed = previous != identity.scope || prefs.getString("name", null) != identity.name ||
+                    prefs.getLong("expires_at", -1L) != identity.expiresAt
+                if (changed) check(prefs.edit().putString("scope", identity.scope)
+                    .putString("name", identity.name).putLong("expires_at", identity.expiresAt).commit())
+                // A signed proof is read many times before it expires. Preserve
+                // each new proof and refresh, without repeating the same journal
+                // row and SharedPreferences write on every read.
+                if (changed || event != "terminal_identity_observed") EvaluationJournal(context).record(event, fields = JSONObject()
                     .put("shop_scope", identity.scope).put("shop_changed", previous != null && previous != identity.scope)
                     .put("expires_at", identity.expiresAt))
                 if (previous != null && previous != identity.scope) {

@@ -1,0 +1,2 @@
+# Cards PostgreSQL local recovery copy. Off-host backup is managed separately.
+30 3 * * * root /usr/bin/flock -n /run/lock/amara-cards-pg-backup.lock /usr/local/sbin/amara-cards-pg-backup >> /var/log/amara-cards-pg-backup.log 2>&1 || /usr/bin/logger -p user.err -t amara-cards-pg-backup 'Cards local backup failed or overlapped'

@@ -18,7 +18,7 @@ class GrowthStore(context: Context) : SQLiteOpenHelper(context, "amara_growth.db
 
     data class Promotion(val listingId: String, val type: String)
     fun history(audience: String): List<Promotion> = readableDatabase.rawQuery(
-        "SELECT listing_id, offering_type FROM promotions WHERE audience=? ORDER BY created_at DESC LIMIT 200", arrayOf(audience),
+        "SELECT listing_id, offering_type FROM promotions WHERE audience=? GROUP BY listing_id, offering_type ORDER BY MAX(created_at) DESC", arrayOf(audience),
     ).use { c -> buildList { while (c.moveToNext()) add(Promotion(c.getString(0), c.getString(1))) } }
 
     fun bind(key: String, audience: String, listing: SokoListing) {
@@ -66,26 +66,34 @@ class GrowthStore(context: Context) : SQLiteOpenHelper(context, "amara_growth.db
     }
 
     companion object {
+        fun groupAudience(shopScope: String, groupId: String): String {
+            require(shopScope.isNotBlank() && groupId.isNotBlank())
+            return "wa-group:$shopScope:$groupId"
+        }
+
         fun typeOf(listing: SokoListing) = if (listing.raw.optString("offering_type") == "SERVICE") "SERVICE" else "PRODUCT"
         /** Cycle through unseen offerings before recycling; alternate products/services when possible. */
-        fun select(listings: List<SokoListing>, history: List<Promotion>, inquiryCounts: Map<String, Int> = emptyMap(), random: (Int) -> Int = { kotlin.random.Random.nextInt(it) }): SokoListing? {
-            val usable = listings.distinctBy { it.id }.filter { it.stock != 0 && TikTokProductContent.from(it) != null }
+        fun select(listings: List<SokoListing>, history: List<Promotion>, inquiryCounts: Map<String, Int> = emptyMap(), trendingListingIds: Set<String> = emptySet(), requireMedia: Boolean = true, random: (Int) -> Int = { kotlin.random.Random.nextInt(it) }): SokoListing? {
+            val usable = listings.distinctBy { it.id }.filter { it.stock != 0 && it.title.isNotBlank() && (!requireMedia || TikTokProductContent.isEligible(it)) }
             if (usable.isEmpty()) return null
             val recentIds = history.map { it.listingId }
-            var pool = usable.filter { it.id !in recentIds }
+            val recentRanks = mutableMapOf<String, Int>()
+            recentIds.forEachIndexed { index, id -> recentRanks.putIfAbsent(id, index) }
+            var pool = usable.filter { it.id !in recentRanks }
             if (pool.isEmpty()) {
                 val last = history.firstOrNull()?.listingId
                 val eligible = usable.filter { it.id != last }.ifEmpty { usable }
-                val oldest = eligible.maxOf { recentIds.indexOf(it.id) }
-                pool = eligible.filter { recentIds.indexOf(it.id) == oldest }
+                val oldest = eligible.maxOf { recentRanks.getValue(it.id) }
+                pool = eligible.filter { recentRanks.getValue(it.id) == oldest }
             }
             val lastType = history.firstOrNull()?.type
             val otherType = pool.filter { typeOf(it) != lastType }.ifEmpty { pool }
             // Explore one time in four; otherwise prefer evidenced demand within the
             // rotation pool. Counts are qualified inquiries, never fabricated sales.
-            val explore = inquiryCounts.isEmpty() || random(4).coerceIn(0,3) == 0
+            val explore = (inquiryCounts.isEmpty() && trendingListingIds.isEmpty()) || random(4).coerceIn(0,3) == 0
             val best = otherType.maxOf { inquiryCounts[it.id] ?: 0 }
-            val ranked = if (explore || best == 0) otherType else otherType.filter { (inquiryCounts[it.id] ?: 0) == best }
+            val demandRanked = if (explore || best == 0) otherType else otherType.filter { (inquiryCounts[it.id] ?: 0) == best }
+            val ranked = if (explore) demandRanked else demandRanked.filter { it.id in trendingListingIds }.ifEmpty { demandRanked }
             return ranked[random(ranked.size).coerceIn(0, ranked.lastIndex)]
         }
     }

@@ -56,8 +56,7 @@ object WhatsAppNotificationParser {
         val inferredGroup = if (extras.containsKey(Notification.EXTRA_IS_GROUP_CONVERSATION))
             extras.getBoolean(Notification.EXTRA_IS_GROUP_CONVERSATION) else conversationTitle.isNotBlank() || title.contains(" @ ")
         val conversation = conversationTitle.ifBlank { title.substringAfter(" @ ", title).trim() }.ifBlank { sender }
-        val lower = "$title $text".lowercase()
-        val missedCall = "missed voice call" in lower || "missed video call" in lower || "missed call" in lower
+        val missedCall = isMissedCallEvent(text) || (text.isBlank() && isMissedCallEvent(title))
         if (sender.isBlank() || (text.isBlank() && !missedCall)) return null
         if (sender.equals("WhatsApp", true) || text.startsWith("Sending message", true) ||
             text.startsWith("Sending file", true)) return null
@@ -74,13 +73,15 @@ object WhatsAppNotificationParser {
             clean.matches(Regex("^(?:🎤\\s*)?(?:voice message|audio|video|photo|sticker|gif)(?:\\s*\\([^)]*\\))?$"))
     }
 
+    internal fun isMissedCallEvent(text: String): Boolean = text.trim().matches(
+        Regex("^(?:[0-9]+\\s+)?missed (?:(?:voice|video) )?calls?$", RegexOption.IGNORE_CASE))
+
     fun parseAccessibility(raw: String): WhatsAppInbound? {
         val clean = raw.trim()
         if (clean.isBlank()) return null
         val separator = clean.indexOf(':')
         val sender = if (separator > 0) clean.substring(0, separator).trim() else "Unknown"
         val message = if (separator > 0) clean.substring(separator + 1).trim() else clean
-        val lower = clean.lowercase()
-        return WhatsAppInbound(sender, message, sender, false, "missed call" in lower)
+        return WhatsAppInbound(sender, message, sender, false, isMissedCallEvent(message))
     }
 }

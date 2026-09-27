@@ -39,6 +39,7 @@ class AutonomousWorkIntegrationTest {
         context.deleteDatabase("amara_chats.db")
         context.deleteDatabase("amara_market.db")
         context.deleteDatabase("amara_learning.db")
+        context.getSharedPreferences("battery_work_hold", Context.MODE_PRIVATE).edit().clear().commit()
     }
 
     @Test fun currentChannelHoursUpdatePendingWorkWithoutReleasingHoldsOrCampaigns() {
@@ -67,6 +68,60 @@ class AutonomousWorkIntegrationTest {
         }
     }
 
+    @Test fun repairedTikTokBreakersReleaseOnlyPreUpdateOwnerCommands() {
+        val now = System.currentTimeMillis()
+        context.deleteDatabase("amara_safety.db")
+        SafetyGovernor(context).use { governor ->
+            for (kind in listOf(WorkKind.TIKTOK_POST_PUBLISH, WorkKind.TIKTOK_COMMENT_REPLY)) {
+                governor.writableDatabase.execSQL(
+                    "INSERT INTO kind_breakers(kind,last_trip_at,cooldown_until,consecutive_failures,attempts_total,failures_total) VALUES (?,?,?,?,?,?)",
+                    arrayOf<Any>(kind.name, now - 1_000, now + 60_000, 3, 9, 6),
+                )
+            }
+            governor.writableDatabase.execSQL(
+                "INSERT INTO kind_breakers(kind,last_trip_at,cooldown_until) VALUES (?,?,?)",
+                arrayOf<Any>(WorkKind.WA_REPLY_INBOUND.name, now - 1_000, now + 60_000),
+            )
+            assertEquals(2, governor.clearCooldownsTrippedBefore(
+                setOf(WorkKind.TIKTOK_POST_PUBLISH, WorkKind.TIKTOK_COMMENT_REPLY), now,
+            ))
+            assertFalse(governor.isKindBreakerOpen(WorkKind.TIKTOK_POST_PUBLISH))
+            assertFalse(governor.isKindBreakerOpen(WorkKind.TIKTOK_COMMENT_REPLY))
+            assertTrue(governor.isKindBreakerOpen(WorkKind.WA_REPLY_INBOUND))
+            governor.readableDatabase.rawQuery(
+                "SELECT consecutive_failures,attempts_total,failures_total FROM kind_breakers WHERE kind=?",
+                arrayOf(WorkKind.TIKTOK_POST_PUBLISH.name),
+            ).use {
+                assertTrue(it.moveToFirst())
+                assertEquals(0, it.getInt(0))
+                assertEquals(9, it.getInt(1))
+                assertEquals(6, it.getInt(2))
+            }
+        }
+        WorkQueue(context).use { queue ->
+            fun item(key: String, owner: Boolean, kind: WorkKind) = WorkItem(
+                key, Domain.TIKTOK, kind,
+                payload = org.json.JSONObject().put("owner_command", owner),
+                baseValueKes = 1.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 30,
+            )
+            val ownerPost = item("owner-post", true, WorkKind.TIKTOK_POST_PUBLISH)
+            val ownerComment = item("owner-comment", true, WorkKind.TIKTOK_COMMENT_REPLY)
+            val scheduled = item("scheduled-story", false, WorkKind.TIKTOK_STORY_PUBLISH)
+            listOf(ownerPost, ownerComment, scheduled).forEach(queue::offer)
+            listOf(ownerPost, ownerComment, scheduled).forEach { queue.deferPending(it.dedupeKey, now + 60_000) }
+            assertEquals(setOf(ownerPost.dedupeKey, ownerComment.dedupeKey),
+                queue.releaseOwnerTikTokDeferrals(now).toSet())
+            assertEquals(setOf(ownerPost.dedupeKey, ownerComment.dedupeKey),
+                queue.allPending().filter { it.payload.optBoolean("owner_command") }.map { it.dedupeKey }.toSet())
+            val snapshot = queue.evaluationSnapshot()
+            assertTrue((0 until snapshot.length()).any {
+                val row = snapshot.getJSONObject(it)
+                row.optString("key") == co.sanaa.agent.core.ContentHashing.hash(scheduled.dedupeKey) &&
+                    row.optLong("not_before") == now + 60_000
+            })
+        }
+    }
+
     @Test fun ownerReviewClosurePreservesHistoryAndCannotReplayWork() {
         WorkQueue(context).use { queue ->
             val item = ManagerReportWork.from("+256700000001", "review-close", "Payment question")!!
@@ -90,7 +145,7 @@ class AutonomousWorkIntegrationTest {
         }
     }
 
-    @Test fun lateOlderNotificationCannotReplaceTheLatestQuestionOrReopenHandledWork() {
+    @Test fun outOfOrderDistinctQuestionsSurviveAndExactReplaysStayDeduplicated() {
         WorkQueue(context).use { queue ->
             fun inbound(key: String, at: Long, identity: String = "origin-a") = WorkItem(
                 dedupeKey = key, domain = Domain.WHATSAPP, kind = WorkKind.WA_REPLY_INBOUND,
@@ -100,8 +155,8 @@ class AutonomousWorkIntegrationTest {
             )
             val latest = inbound("new-question",200)
             assertEquals(WorkQueue.OfferResult.ACCEPTED, queue.offer(latest))
-            assertEquals(WorkQueue.OfferResult.DEDUPED, queue.offer(inbound("late-old-question",100)))
-            assertEquals(latest.dedupeKey,queue.allPending().single().dedupeKey)
+            assertEquals(WorkQueue.OfferResult.ACCEPTED, queue.offer(inbound("late-old-question",100)))
+            assertEquals(setOf(latest.dedupeKey, "late-old-question"),queue.allPending().map { it.dedupeKey }.toSet())
             queue.complete(latest.dedupeKey)
             assertEquals(WorkQueue.OfferResult.DEDUPED, queue.offer(inbound("late-old-question",100)))
             assertEquals(WorkQueue.OfferResult.ACCEPTED, queue.offer(inbound("other-customer",100,"origin-b")))
@@ -109,7 +164,7 @@ class AutonomousWorkIntegrationTest {
             val missed = inbound("missed-call",400).copy(payload = org.json.JSONObject(latest.payload.toString()).put("is_missed_call",true))
             queue.offer(missed)
             queue.compactPendingBacklog()
-            assertEquals(3,queue.allPending().size)
+            assertEquals(4,queue.allPending().size)
         }
     }
 
@@ -242,7 +297,7 @@ class AutonomousWorkIntegrationTest {
                 baseValueKes=1.0,urgencyHalfLifeHours=1.0,estimatedScreenSeconds=20)
             queue.offer(item("sam1","origin1"));queue.offer(item("sam2","origin2"));queue.offer(item("sam1-new","origin1"))
             queue.compactPendingBacklog()
-            assertEquals(setOf("sam2","sam1-new"),queue.allPending().map { it.dedupeKey }.toSet())
+            assertEquals(setOf("sam1","sam2","sam1-new"),queue.allPending().map { it.dedupeKey }.toSet())
         }
     }
 
@@ -283,7 +338,8 @@ class AutonomousWorkIntegrationTest {
     }
 
     @Test fun taskDeadlinesBoundQueueOccupancy() {
-        assertEquals(90_000L, AmaraWorkLoop.itemTimeoutMs(WorkKind.WA_REPLY_INBOUND))
+        assertEquals(180_000L, AmaraWorkLoop.itemTimeoutMs(WorkKind.WA_REPLY_INBOUND))
+        assertEquals(240_000L, AmaraWorkLoop.itemTimeoutMs(WorkKind.WA_BROADCAST))
         assertEquals(120_000L, AmaraWorkLoop.itemTimeoutMs(WorkKind.JUMIA_CAPTURE))
         assertEquals(480_000L, AmaraWorkLoop.itemTimeoutMs(WorkKind.TIKTOK_POST_PUBLISH))
         assertEquals(600_000L, AmaraWorkLoop.itemTimeoutMs(WorkKind.YOUTUBE_SHORT_PUBLISH))
@@ -292,18 +348,63 @@ class AutonomousWorkIntegrationTest {
 
     @Test fun groupWorkCatchesUpDuringDayAndUsesOnlyAllowedTargets() = runBlocking {
         var enabled = true
-        var targets = listOf("Naalya E-Trade")
+        var targets = listOf(co.sanaa.agent.core.work.sources.GroupDestination("wa-origin:group-1", "Naalya E-Trade"))
         val source = co.sanaa.agent.core.work.sources.WhatsAppGroupSource({ enabled }, { targets }, { "2026-09-05" })
         val first = source.propose(snapshot(hour = 15)).single()
         assertEquals("Naalya E-Trade", first.payload.getString("group_target"))
+        assertEquals("wa-origin:group-1", first.payload.getString("group_id"))
         assertEquals(first.dedupeKey, source.propose(snapshot(hour = 19)).single().dedupeKey)
         assertEquals(first.dedupeKey, source.propose(snapshot(hour = 21, quiet = false)).single().dedupeKey)
+        targets = listOf(co.sanaa.agent.core.work.sources.GroupDestination("wa-origin:group-1", "Naalya E-Trade Renamed"))
+        assertTrue(first.dedupeKey != source.propose(snapshot(hour = 19)).single().dedupeKey)
         assertTrue(source.propose(snapshot(quiet = true)).isEmpty())
         targets = emptyList()
         assertTrue(source.propose(snapshot()).isEmpty())
-        targets = listOf("Naalya E-Trade")
+        targets = listOf(co.sanaa.agent.core.work.sources.GroupDestination("wa-origin:group-1", "Naalya E-Trade"))
         enabled = false
         assertTrue(source.propose(snapshot()).isEmpty())
+    }
+
+    @Test fun groupDestinationBindingHoldsRenamedReusedAndAmbiguousLabels() {
+        val binding = co.sanaa.agent.core.work.sources.GroupDestinationBinding
+        val destination = co.sanaa.agent.core.work.sources.GroupDestination("group-a", "Sales team")
+        assertTrue(binding.matches("group-a", "Sales team", listOf(destination)))
+        assertFalse(binding.matches("", "Sales team", listOf(destination)))
+        assertFalse(binding.matches("group-a", "Sales team", listOf(destination.copy(name = "Renamed"))))
+        assertFalse(binding.matches("group-a", "Sales team", listOf(
+            destination.copy(name = "Renamed"),
+            co.sanaa.agent.core.work.sources.GroupDestination("group-b", "Sales team"),
+        )))
+        assertFalse(binding.matches("group-a", "Sales team", listOf(
+            destination,
+            co.sanaa.agent.core.work.sources.GroupDestination("group-b", "Sales team"),
+        )))
+    }
+
+    @Test fun heldGroupExcludesOnlyItsOwnJobDuringTheSession() {
+        val kinds = mutableSetOf<WorkKind>()
+        val keys = mutableSetOf<String>()
+        val held = WorkItem("held-group", Domain.WHATSAPP, WorkKind.WA_BROADCAST,
+            payload = org.json.JSONObject().put("group_target", "Sales team"),
+            baseValueKes = 1.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 0)
+        AmaraWorkLoop.isolateAfterOutcome(held, kinds, keys)
+        assertEquals(setOf("held-group"), keys)
+        assertFalse(WorkKind.WA_BROADCAST in kinds)
+        val other = held.copy(dedupeKey = "healthy-group")
+        assertFalse(other.dedupeKey in keys)
+        WorkQueue(context).use { queue ->
+            queue.offer(held)
+            queue.offer(other)
+            assertEquals("healthy-group", queue.peekBest(System.currentTimeMillis(),
+                excludeKinds = kinds, excludeKeys = keys)?.dedupeKey)
+        }
+    }
+
+    @Test fun groupShopRecoveryRunsBehindGroupSpecificDueAndHoldChecks() {
+        fun item(payload: org.json.JSONObject) = WorkItem("group-recovery", Domain.WHATSAPP, WorkKind.WA_BROADCAST,
+            payload=payload,baseValueKes=1.0,urgencyHalfLifeHours=1.0,estimatedScreenSeconds=0)
+        assertFalse(WorkExecutor.needsSharedShopRecovery(item(org.json.JSONObject().put("group_target","Sales team"))))
+        assertTrue(WorkExecutor.needsSharedShopRecovery(item(org.json.JSONObject().put("run_module",true))))
     }
 
     @Test fun successfulRecoveryDoesNotReopenBreakerFromHistoricalFailureRate() {
@@ -440,6 +541,14 @@ class AutonomousWorkIntegrationTest {
         assertTrue(AutonomyController.isSokoTikTokPostCommand("Promote Soko services on TikTok"))
         assertFalse(AutonomyController.isSokoTikTokPostCommand("Read my TikTok analytics"))
         assertFalse(AutonomyController.isSokoTikTokPostCommand("Post a WhatsApp status"))
+        assertTrue(AutonomyController.isYouTubeShortPostCommand("Post the latest verified TikTok ad to YouTube Shorts now"))
+        assertTrue(AutonomyController.isYouTubeShortPostCommand("Cross-post it as a YouTube Short"))
+        assertFalse(AutonomyController.isYouTubeShortPostCommand("Check YouTube analytics"))
+        assertFalse(AutonomyController.isYouTubeShortPostCommand("Prepare a TikTok draft"))
+        assertTrue(AutonomyController.isTikTokCommunityCommand("Engage with the TikTok community now"))
+        assertTrue(AutonomyController.isTikTokCommunityCommand("Check TikTok community engagement"))
+        assertFalse(AutonomyController.isTikTokCommunityCommand("Read my TikTok analytics"))
+        assertFalse(AutonomyController.isTikTokCommunityCommand("Post a Soko product on TikTok"))
     }
 
     @Test fun disablingAChannelRemovesOnlyItsPendingWork() {
@@ -486,7 +595,7 @@ class AutonomousWorkIntegrationTest {
         assertEquals(listOf("tiktok-post-3"), queue.allPending().map { it.dedupeKey })
     }
 
-    @Test fun backlogCompactionKeepsNewestInboundPerConversation() {
+    @Test fun backlogCompactionPreservesDistinctQuestionsAndHoldsTransportNotifications() {
         val queue = WorkQueue(context)
         fun inbound(key: String, conversation: String, message: String) = WorkItem(
             key, Domain.WHATSAPP, WorkKind.WA_REPLY_INBOUND,
@@ -506,7 +615,7 @@ class AutonomousWorkIntegrationTest {
         )
         queue.compactPendingBacklog()
 
-        assertEquals(setOf("a2", "b1"), queue.allPending().map { it.dedupeKey }.toSet())
+        assertEquals(setOf("a1", "a2", "b1"), queue.allPending().map { it.dedupeKey }.toSet())
     }
 
     @Test fun lockedOrSleepingPhoneIsAvailableForAutonomousWork() {
@@ -551,10 +660,23 @@ class AutonomousWorkIntegrationTest {
         assertNotNull(budgeter.requestSession(snapshot(hour = 23, quiet = true), item))
         assertNull(budgeter.requestSession(snapshot(hour = 23, ownerActive = true), item))
         assertNull(budgeter.requestSession(snapshot(hour = 23).copy(batteryPercent = 15), item))
-        assertNotNull(budgeter.requestSession(snapshot(hour = 23).copy(batteryPercent = 16), item))
-        assertNotNull(budgeter.requestSession(snapshot(hour = 23).copy(batteryPercent = 19), item))
+        assertNull(budgeter.requestSession(snapshot(hour = 23).copy(batteryPercent = 16), item))
+        assertNull(budgeter.requestSession(snapshot(hour = 23).copy(batteryPercent = 19), item))
+        assertNotNull(budgeter.requestSession(snapshot(hour = 23).copy(batteryPercent = 20), item))
         assertNotNull(budgeter.requestSession(snapshot(hour = 23), item.copy(payload = org.json.JSONObject())))
         assertNull(budgeter.requestSession(snapshot(hour = 23, quiet = true), item.copy(payload = org.json.JSONObject())))
+    }
+
+    @Test fun warmPhoneWithHalfBatteryCanFitAShortReplyButKeepsThermalLimits() {
+        val budgeter = PhoneTimeBudgeter(context)
+        val reply = WorkItem("warm-reply", Domain.WHATSAPP, WorkKind.WA_REPLY_INBOUND,
+            baseValueKes=100.0, urgencyHalfLifeHours=1.0, estimatedScreenSeconds=45,
+            requires=setOf(Capability.SCREEN))
+        val world = snapshot(hour=12).copy(batteryPercent=46, thermalState=ThermalState.WARM)
+        assertEquals(120,budgeter.requestSession(world,reply)?.maxDurationSeconds)
+        assertNull(budgeter.requestSession(world,reply.copy(estimatedScreenSeconds=240)))
+        assertNull(budgeter.requestSession(world.copy(thermalState=ThermalState.HOT),reply))
+        assertNull(budgeter.requestSession(world.copy(ownerActive=true),reply))
     }
 
     @Test fun inboundReplyGetsSmallReserveAfterNormalBudgetIsSpent() {
@@ -621,6 +743,56 @@ class AutonomousWorkIntegrationTest {
             baseValueKes = 300.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 45,
         )
         assertTrue(governor.isAllowed(whatsapp, 0, 0, snapshot()).allowed)
+    }
+
+    @Test fun oneBrokenWhatsappConversationDoesNotDelayAnotherCustomer() {
+        context.deleteDatabase("amara_safety.db")
+        SafetyGovernor(context).use { governor ->
+            fun reply(key: String, identity: String) = WorkItem(
+                key, Domain.WHATSAPP, WorkKind.WA_REPLY_INBOUND,
+                payload = org.json.JSONObject().put("inbound", true)
+                    .put("conversation_identity", identity).put("conversation", identity),
+                baseValueKes = 1.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 30,
+            )
+            val broken = reply("broken-a", "origin-a")
+            repeat(3) { governor.recordExecution(WorkResult(broken, WorkStatus.FAILED)) }
+            assertFalse(governor.isAllowed(broken, 0, 0, snapshot()).allowed)
+            assertTrue(governor.isAllowed(reply("healthy-b", "origin-b"), 0, 0, snapshot()).allowed)
+        }
+    }
+
+    @Test fun newerQuestionDoesNotCloseAnUnansweredReviewOrUncertainReceipt() {
+        WorkQueue(context).use { queue ->
+            fun inbound(key: String, at: Long) = WorkItem(
+                key, Domain.WHATSAPP, WorkKind.WA_REPLY_INBOUND,
+                payload = org.json.JSONObject().put("inbound", true)
+                    .put("conversation_identity", "origin-a").put("conversation", "Customer")
+                    .put("message", "Question $at").put("inbound_message_at", at),
+                baseValueKes = 1.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 30,
+            )
+            val navigation = inbound("navigation-failed", 100)
+            queue.offer(navigation)
+            queue.requireReview(navigation,
+                "Originating WhatsApp conversation could not be verified: route expired")
+            queue.offer(inbound("newer-question", 200))
+            queue.readableDatabase.rawQuery(
+                "SELECT status,payload FROM work_items WHERE dedupe_key=?", arrayOf(navigation.dedupeKey),
+            ).use {
+                assertTrue(it.moveToFirst())
+                assertEquals("NEEDS_REVIEW", it.getString(0))
+                assertEquals("Originating WhatsApp conversation could not be verified: route expired",
+                    org.json.JSONObject(it.getString(1)).getString("review_reason"))
+            }
+
+            val uncertain = inbound("timeout-uncertain", 300)
+            queue.offer(uncertain)
+            queue.requireReview(uncertain,
+                "Task exceeded its time budget; saved for review. Any external effect is unproven and must not be blindly retried.")
+            queue.offer(inbound("latest-question", 400))
+            queue.readableDatabase.rawQuery(
+                "SELECT status FROM work_items WHERE dedupe_key=?", arrayOf(uncertain.dedupeKey),
+            ).use { assertTrue(it.moveToFirst()); assertEquals("NEEDS_REVIEW", it.getString(0)) }
+        }
     }
 
     @Test fun allDayAutopilotCanEnrollOnlyTrustedDirectInboundChats() {
@@ -730,6 +902,13 @@ class AutonomousWorkIntegrationTest {
 
         val recycled = WorkExecutor.selectTikTokListing(products, listOf("One", "Two", "Three", "Four")) { 0 }
         assertTrue(recycled?.title != "One")
+        // New receipts use stable listing IDs; legacy title receipts remain understood.
+        val byId = WorkExecutor.selectTikTokListing(products, listOf("1", "2")) { 0 }
+        assertEquals("Three", byId?.title)
+        // Trend evidence may influence recycling only after the full cycle and cannot
+        // bypass the rolling repeat gap (newest IDs are 1 and 2 here).
+        val trend = WorkExecutor.selectTikTokListing(products, listOf("1", "2", "3", "4"), setOf("1", "3")) { 0 }
+        assertEquals("Three", trend?.title)
         assertNull(WorkExecutor.selectTikTokListing(products.map { it.copy(imageUrl = null) }, emptyList()))
     }
 

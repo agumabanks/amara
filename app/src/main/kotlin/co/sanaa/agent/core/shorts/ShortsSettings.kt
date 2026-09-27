@@ -8,11 +8,14 @@ class ShortsSettings(context: Context) {
     val channel get() = prefs.getString("channel", "").orEmpty()
     val intervalMinutes get() = prefs.getInt("interval", 240)
     val dailyCap get() = prefs.getInt("cap", 3)
+    val zone get() = runCatching { java.time.ZoneId.of(prefs.getString("timezone", null).orEmpty()) }
+        .getOrDefault(java.time.ZoneId.systemDefault())
     val audioCleared get() = prefs.getBoolean("audio_cleared", false)
     val visibility get() = prefs.getString("visibility", "Public").orEmpty()
     val madeForKids get() = prefs.getBoolean("made_for_kids", false)
     fun all(): Map<String, Any> = mapOf("youtubeEnabled" to enabled, "youtubeChannel" to channel,
         "youtubeIntervalMinutes" to intervalMinutes, "youtubeDailyCap" to dailyCap,
+        "youtubeTimezone" to zone.id,
         "youtubeAudioCleared" to audioCleared,
         "youtubeVisibility" to visibility, "youtubeMadeForKids" to madeForKids,
         "youtubeStatus" to (prefs.getString("status", null) ?: "No Shorts prepared yet"))
@@ -28,6 +31,11 @@ class ShortsSettings(context: Context) {
             }
             "youtubeIntervalMinutes" -> edit.putInt("interval", (value as Number).toInt().coerceIn(10, 1440))
             "youtubeDailyCap" -> edit.putInt("cap", (value as Number).toInt().coerceIn(1, 24))
+            "youtubeTimezone" -> {
+                val id = (value as? String)?.trim().orEmpty()
+                val zone = runCatching { java.time.ZoneId.of(id) }.getOrNull() ?: return false
+                edit.putString("timezone", zone.id)
+            }
             "youtubeAudioCleared" -> edit.putBoolean("audio_cleared", value as Boolean)
             "youtubeVisibility" -> {
                 if (value !in setOf("Public", "Unlisted", "Private")) return false

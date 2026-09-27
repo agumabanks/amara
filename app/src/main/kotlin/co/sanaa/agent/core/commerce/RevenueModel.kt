@@ -867,10 +867,14 @@ class RevenueStore(private val memory: AmaraMemory) {
 
     @Synchronized
     fun savePolicy(policy: CommercialPolicy, nowMs: Long): Boolean {
+        val serialized = policy.toJson()
+        // Never truncate JSON: a large catalogue allow-list must not destroy the
+        // owner's timezone, consent limits or the entire policy on the next read.
+        if (serialized.toByteArray(Charsets.UTF_8).size > 1_048_576) return false
         db.execSQL(
             """INSERT INTO commercial_policy(id, config_json, updated_at) VALUES(1, ?, ?)
                ON CONFLICT(id) DO UPDATE SET config_json=excluded.config_json, updated_at=excluded.updated_at""",
-            arrayOf<Any>(policy.toJson().take(8_000), nowMs),
+            arrayOf<Any>(serialized, nowMs),
         )
         return true
     }

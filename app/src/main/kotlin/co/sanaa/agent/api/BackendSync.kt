@@ -5,18 +5,32 @@ import android.provider.Settings
 import co.sanaa.agent.core.Redactor
 import co.sanaa.agent.core.SecureConfig
 import co.sanaa.agent.core.AmaraMemory
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import co.sanaa.agent.core.TerminalShopIdentity
+import co.sanaa.agent.core.work.AgentEventOutbox
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import java.util.UUID
+import java.io.IOException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 class BackendSync(private val context: Context, private val config: SecureConfig, private val memory: AmaraMemory? = null) {
-    private val client = OkHttpClient.Builder().dns(BackendDns.forUrl { config.backendUrl }).connectTimeout(15, TimeUnit.SECONDS).readTimeout(45, TimeUnit.SECONDS).build()
+    val eventOutbox = AgentEventOutbox(context)
+    private val eventSyncMutex = Mutex()
+    private val client = OkHttpClient.Builder().dns(BackendDns.forUrl { config.backendUrl })
+        .connectTimeout(15, TimeUnit.SECONDS).readTimeout(45, TimeUnit.SECONDS)
+        .callTimeout(60, TimeUnit.SECONDS).build()
 
     suspend fun registerAndSync(): JSONObject {
         require(co.sanaa.agent.core.OwnerPower(context).isOn()) { "Amara is off by owner request" }
@@ -53,6 +67,72 @@ class BackendSync(private val context: Context, private val config: SecureConfig
         require(co.sanaa.agent.core.OwnerPower(context).isOn()) { "Amara is off by owner request" }
         require(config.configSyncEnabled) { "Configuration sync is disabled by the owner." }
         return get("status/${config.deviceId}")
+    }
+
+    /** Report only the shop named in Terminal's signed, short-lived assertion. */
+    suspend fun observeTerminalShop(shop: TerminalShopIdentity): Boolean {
+        if (!config.configSyncEnabled || !config.ownerAllowsWork() || config.agentToken.isBlank()) return false
+        ensureDeviceId()
+        val response = request(Request.Builder().url(url("shop-observation"))
+            .post(JSONObject().put("device_id", config.deviceId).toString().toRequestBody(JSON))
+            .header("Accept", "application/json")
+            .header("X-Terminal-Identity", shop.assertion)
+            .authenticated().build())
+        val confirmed = response.getJSONObject("shop_identity")
+        check(confirmed.getLong("seller_id") == shop.sellerId && confirmed.getLong("shop_id") == shop.shopId) {
+            "Cards confirmed a different Terminal shop"
+        }
+        eventOutbox.bindShop(shop.scope, response.getLong("binding_revision"))
+        return true
+    }
+
+    /** Replays a small durable batch; only server acknowledged IDs leave the outbox. */
+    suspend fun syncEvents(): Int = eventSyncMutex.withLock {
+        if (!config.telemetryOptIn || !config.configSyncEnabled || !config.ownerAllowsWork() || config.agentToken.isBlank()) return@withLock 0
+        val batch = eventOutbox.pending()
+        if (batch.isEmpty()) return@withLock 0
+        ensureDeviceId()
+        val payload = JSONArray().apply { batch.forEach { put(it.second) } }
+        val response = post("events", JSONObject().put("device_id", config.deviceId).put("events", payload))
+        val acknowledged = mutableListOf<String>()
+        for (field in listOf("accepted", "duplicates")) {
+            val ids = response.optJSONArray(field) ?: continue
+            for (i in 0 until ids.length()) ids.getString(i).takeIf { id -> batch.any { it.first == id } }?.let(acknowledged::add)
+        }
+        eventOutbox.acknowledge(acknowledged)
+        val rejected = response.optJSONArray("rejected") ?: JSONArray()
+        for (i in 0 until rejected.length()) {
+            val item = rejected.getJSONObject(i)
+            val id = item.optString("event_id")
+            if (batch.none { it.first == id }) continue
+            val code = item.optString("code")
+            if (code == "unknown_binding_revision") eventOutbox.waitForBinding(id)
+            else eventOutbox.reject(id, code)
+        }
+        acknowledged.size
+    }
+
+    /** One bounded health sample. Consent is independent of bulk telemetry. */
+    suspend fun heartbeat(snapshot: Map<String, Any>): Boolean {
+        if (!config.operationalReportingEnabled || !config.configSyncEnabled ||
+            !config.ownerAllowsWork() || config.agentToken.isBlank()) return false
+        ensureDeviceId()
+        val body = JSONObject()
+            .put("device_id", config.deviceId)
+            .put("agent_version", co.sanaa.agent.BuildConfig.VERSION_NAME)
+            .put("uptime_ms", android.os.SystemClock.elapsedRealtime())
+            .put("accessibility_bound", snapshot["accessibilityBound"] == true)
+        (snapshot["pendingWorkCount"] as? Number)?.toInt()?.takeIf { it >= 0 }
+            ?.let { body.put("pending_tasks", it) }
+        (snapshot["batteryPercent"] as? Number)?.toInt()?.takeIf { it in 0..100 }
+            ?.let { body.put("battery_level", it) }
+        (snapshot["charging"] as? Boolean)?.let { body.put("is_charging", it) }
+        (snapshot["network"] as? String)?.let { body.put("network_state", it) }
+        (snapshot["remoteCommandRevision"] as? Number)?.let { body.put("remote_command_revision", it.toLong()) }
+        (snapshot["remoteWorkPaused"] as? Boolean)?.let { body.put("remote_work_paused", it) }
+        (snapshot["systemLockout"] as? Boolean)?.let { body.put("system_lockout", it) }
+        post("heartbeat", body)
+        return true
     }
 
     suspend fun log(module: String, action: String, platform: String?, summary: String, success: Boolean, escalated: Boolean = false, error: String? = null, metadata: JSONObject? = null, recordMemory: Boolean = true): Boolean {
@@ -121,16 +201,33 @@ class BackendSync(private val context: Context, private val config: SecureConfig
         return request(builder.build())
     }
 
-    private suspend fun request(request: Request): JSONObject = withContext(Dispatchers.IO) {
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IllegalStateException(when (response.code) {
-                401 -> "Cards connection needs pairing. Open Settings → Connect to Cards admin."
-                429 -> "Cards is receiving too many requests. Try again in a minute."
-                else -> "Cards could not complete the request (HTTP ${response.code}). Try again shortly."
-            })
-            JSONObject(body)
-        }
+    private suspend fun request(request: Request): JSONObject = suspendCancellableCoroutine { continuation ->
+        val requestId = UUID.randomUUID().toString()
+        val correlated = request.newBuilder().header("X-Amara-Request-ID", requestId).build()
+        val call = client.newCall(correlated)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) continuation.resumeWithException(e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!continuation.isActive) return
+                    try {
+                        val body = response.body?.string().orEmpty()
+                        if (!response.isSuccessful) throw IllegalStateException(when (response.code) {
+                            401 -> "Cards connection needs pairing. Open Settings → Connect to Cards admin."
+                            429 -> "Cards is receiving too many requests. Try again in a minute."
+                            else -> "Cards could not complete the request (HTTP ${response.code}; reference $requestId). Try again shortly."
+                        })
+                        continuation.resume(JSONObject(body))
+                    } catch (e: Exception) {
+                        if (continuation.isActive) continuation.resumeWithException(e)
+                    }
+                }
+            }
+        })
     }
 
     private fun Request.Builder.authenticated() = apply {

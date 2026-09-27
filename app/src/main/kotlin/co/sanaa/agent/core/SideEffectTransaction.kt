@@ -1,6 +1,8 @@
 package co.sanaa.agent.core
 
 import java.security.MessageDigest
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * Universal side-effect transaction states. Every external action passes through
@@ -144,8 +146,11 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
     var ownerAllowsWork: () -> Boolean = { ledger.ownerAllowsWork() }
     var businessScopeGuard: (String, Map<String, Any?>) -> String? = { _, _ -> null }
     var evaluationObserver: ((String, String, String) -> Unit)? = null
-    private fun observed(state: String, capability: String, key: String) {
+    /** Receipt projection hook: (state, capability, idempotencyKey, target, contentHash, workKey). */
+    var receiptObserver: ((String, String, String, String, String, String) -> Unit)? = null
+    private fun observed(state: String, capability: String, key: String, target: String = "", contentHash: String = "", workKey: String = "") {
         try { evaluationObserver?.invoke(state, capability, key) } catch (_: Exception) { /* telemetry cannot affect dispatch */ }
+        try { receiptObserver?.invoke(state, capability, key, target, contentHash, workKey) } catch (_: Exception) { /* receipts cannot affect dispatch */ }
     }
 
     /**
@@ -165,10 +170,12 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
         approvalId: Long? = null,
         approvalValidator: suspend (Long) -> Boolean = { true },
         inputs: Map<String, Any?> = emptyMap(),
+        workKey: String = "",
         preflight: (suspend () -> String?)? = null,
         act: suspend () -> Boolean,
         verify: suspend () -> VerificationEvidence,
     ): SideEffectOutcome {
+        currentCoroutineContext().ensureActive()
         if (!ownerAllowsWork()) return SideEffectOutcome.Rejected("Amara is off by owner request")
         businessScopeGuard(capabilityId, inputs)?.let { return SideEffectOutcome.Rejected(it) }
         // ---- Resolve + validate against the authoritative catalog ----
@@ -234,6 +241,7 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
         }
 
         // ---- Claim before acting ----
+        currentCoroutineContext().ensureActive()
         val now = clock()
         val claimed = if (existing == null) {
             ledger.upsert(
@@ -246,6 +254,7 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
         if (!claimed) {
             return SideEffectOutcome.Rejected("The transaction could not be claimed for '$capabilityId' ($idempotencyKey); refusing to act.")
         }
+        observed("CLAIMED", capabilityId, idempotencyKey, target, contentHash, workKey)
         try {
             // Preflight runs while still CLAIMED and BEFORE the approval is consumed: a
             // rejected preflight proves nothing was dispatched, so an otherwise-valid
@@ -253,32 +262,39 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
             // consuming inside the preflight itself when it wants one-shot semantics).
             if (!ownerAllowsWork()) {
                 ledger.transition(idempotencyKey, SideEffectState.CANCELLED, "Amara is off by owner request")
+                observed("CANCELLED", capabilityId, idempotencyKey, target, contentHash, workKey)
                 return SideEffectOutcome.Rejected("Amara is off by owner request")
             }
             preflight?.let { check ->
                 val blocker = check()
                 if (blocker != null) {
                     ledger.transition(idempotencyKey, SideEffectState.CANCELLED, Redactor.redact(blocker))
+                    observed("CANCELLED", capabilityId, idempotencyKey, target, contentHash, workKey)
                     return SideEffectOutcome.Failed(blocker)
                 }
             }
             if (!ownerAllowsWork()) {
                 ledger.transition(idempotencyKey, SideEffectState.CANCELLED, "Owner turned Amara off during preflight")
+                observed("CANCELLED", capabilityId, idempotencyKey, target, contentHash, workKey)
                 return SideEffectOutcome.Rejected("Amara is off by owner request")
             }
             businessScopeGuard(capabilityId, inputs)?.let { blocker ->
                 ledger.transition(idempotencyKey, SideEffectState.CANCELLED, Redactor.redact(blocker))
+                observed("CANCELLED", capabilityId, idempotencyKey, target, contentHash, workKey)
                 return SideEffectOutcome.Rejected(blocker)
             }
             // FINAL PRE-ACT BOUNDARY: the approval is validated AND consumed atomically
             // here — the last moment before any external dispatch. Expiry, revocation,
             // binding mismatch, and exhausted execution counts all cancel cleanly.
+            currentCoroutineContext().ensureActive()
             if (approvalId != null && !approvalValidator(approvalId)) {
                 ledger.transition(idempotencyKey, SideEffectState.CANCELLED, "Approval expired, revoked, mismatched, or exhausted at the pre-act boundary.")
+                observed("CANCELLED", capabilityId, idempotencyKey, target, contentHash, workKey)
                 return SideEffectOutcome.Failed("The approval was not consumable at the final boundary; nothing was done.")
             }
+            currentCoroutineContext().ensureActive()
             ledger.transition(idempotencyKey, SideEffectState.ACTING, "Preflight and authority checks passed; acting once.")
-            observed("ACTING", capabilityId, idempotencyKey)
+            observed("ACTING", capabilityId, idempotencyKey, target, contentHash, workKey)
             val deadlineMs = clock() + spec.timeoutMs
             fun overDeadline(): Boolean = clock() > deadlineMs
             // Contract: act() returns false ONLY when the external trigger provably never
@@ -289,7 +305,7 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
             } catch (error: Throwable) {
                 ledger.transition(idempotencyKey, SideEffectState.UNCERTAIN,
                     "Exception during external action: ${Redactor.redact(error.message ?: error.javaClass.simpleName)}")
-                observed("UNCERTAIN", capabilityId, idempotencyKey)
+                observed("UNCERTAIN", capabilityId, idempotencyKey, target, contentHash, workKey)
                 if (error is kotlinx.coroutines.CancellationException) throw error
                 return SideEffectOutcome.Uncertain(
                     "The action was interrupted mid-flight (${error.message ?: "unknown"}); whether it took effect could not be proven.",
@@ -298,10 +314,11 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
             if (!acted) {
                 val proof = "Action reported the external trigger was never dispatched."
                 ledger.transition(idempotencyKey, SideEffectState.FAILED, proof)
-                observed("FAILED", capabilityId, idempotencyKey)
+                observed("FAILED", capabilityId, idempotencyKey, target, contentHash, workKey)
                 return SideEffectOutcome.Failed(proof.removePrefix("Action reported the "))
             }
             ledger.transition(idempotencyKey, SideEffectState.VERIFICATION_PENDING, "Verifying post-state against the verification contract.")
+            observed("VERIFICATION_PENDING", capabilityId, idempotencyKey, target, contentHash, workKey)
             val evidence = runCatching { verify() }.getOrElse {
                 if (it is kotlinx.coroutines.CancellationException) throw it
                 VerificationEvidence.impossible("Verifier itself failed: ${it.message ?: "unknown"}")
@@ -313,6 +330,7 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
                     idempotencyKey, SideEffectState.UNCERTAIN,
                     "Verification completed after the ${spec.timeoutMs}ms deadline for '$capabilityId'; result kept unproven.",
                 )
+                observed("UNCERTAIN", capabilityId, idempotencyKey, target, contentHash, workKey)
                 return SideEffectOutcome.Uncertain(
                     "The ${'$'}capabilityId result could only be proven after its ${spec.timeoutMs}ms deadline, so it is recorded unproven.",
                 )
@@ -330,15 +348,24 @@ class SideEffectRunner(private val ledger: SideEffectLedger, private val clock: 
                 "blocker=${evidence.blocker?.let(Redactor::redact)?.take(300) ?: "none"}",
             ).joinToString("; ")
             ledger.finalize(idempotencyKey, finalState, redactedEvidence)
-            observed(finalState.name, capabilityId, idempotencyKey)
+            observed(finalState.name, capabilityId, idempotencyKey, target, contentHash, workKey)
             return when (finalState) {
                 SideEffectState.VERIFIED -> SideEffectOutcome.Verified(evidence)
                 SideEffectState.FAILED -> SideEffectOutcome.Failed(evidence.blocker ?: "Verification proved no effect occurred.")
                 else -> SideEffectOutcome.Uncertain("Could not prove whether the action took effect. ${evidence.blocker ?: ""}".trim())
             }
         } catch (t: Throwable) {
-            ledger.finalize(idempotencyKey, SideEffectState.UNCERTAIN, "Unexpected termination during transaction: ${Redactor.redact(t.message ?: t.javaClass.simpleName)}")
-            observed("UNCERTAIN", capabilityId, idempotencyKey)
+            if (t is kotlinx.coroutines.CancellationException && ledger.find(idempotencyKey)?.state == SideEffectState.CLAIMED) {
+                ledger.transition(idempotencyKey, SideEffectState.CANCELLED, "Cancelled before external dispatch; nothing was sent.")
+                observed("CANCELLED", capabilityId, idempotencyKey, target, contentHash, workKey)
+                throw t
+            }
+            // The act boundary already records cancellation uncertainty. Do not
+            // emit a second transition for the same interrupted attempt.
+            if (ledger.find(idempotencyKey)?.state != SideEffectState.UNCERTAIN) {
+                ledger.finalize(idempotencyKey, SideEffectState.UNCERTAIN, "Unexpected termination during transaction: ${Redactor.redact(t.message ?: t.javaClass.simpleName)}")
+                observed("UNCERTAIN", capabilityId, idempotencyKey, target, contentHash, workKey)
+            }
             if (t is kotlinx.coroutines.CancellationException) throw t
             return SideEffectOutcome.Uncertain("The transaction ended unexpectedly; the effect could not be proven.")
         }

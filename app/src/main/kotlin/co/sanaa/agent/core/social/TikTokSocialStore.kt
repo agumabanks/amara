@@ -16,8 +16,18 @@ class TikTokSocialStore(context: Context) : SQLiteOpenHelper(context, "amara_tik
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
     fun observe(key: String, creator: String, data: JSONObject, now: Long = System.currentTimeMillis()) {
         writableDatabase.execSQL("INSERT OR IGNORE INTO observations(post_key,creator,payload,observed_at) VALUES(?,?,?,?)", arrayOf(key,creator,data.toString(),now))
-        val previous=readableDatabase.rawQuery("SELECT payload FROM observations WHERE post_key=?",arrayOf(key)).use { if(it.moveToFirst()) JSONObject(it.getString(0)) else JSONObject() }
-        previous.optJSONObject("decision")?.let { data.put("decision",it).put("decision_at",previous.optLong("decision_at")) }
+        val previous=readableDatabase.rawQuery("SELECT payload,reserved_at FROM observations WHERE post_key=?",arrayOf(key)).use {
+            if(it.moveToFirst()) JSONObject(it.getString(0)).apply {
+                if (it.getLong(1) > 0) {
+                    if (!has("reservation_shop_scope")) put("reservation_shop_scope", optString("shop_scope"))
+                    if (!has("reservation_account_handle")) put("reservation_account_handle", optString("account_handle"))
+                }
+            } else JSONObject()
+        }
+        for (field in listOf("reservation_shop_scope", "reservation_account_handle"))
+            if (previous.has(field)) data.put(field, previous.get(field))
+        if (previous.optString("shop_scope") == data.optString("shop_scope"))
+            previous.optJSONObject("decision")?.let { data.put("decision",it).put("decision_at",previous.optLong("decision_at")) }
         if(previous.has("reconciled_at")) data.put("reconciled_at",previous.optLong("reconciled_at"))
         if(previous.has("reconciled_verified")) data.put("reconciled_verified",previous.optBoolean("reconciled_verified"))
         data.put("last_seen",now)
@@ -39,7 +49,7 @@ class TikTokSocialStore(context: Context) : SQLiteOpenHelper(context, "amara_tik
         fun count(sql: String, args: Array<String>) = db.rawQuery(sql,args).use { it.moveToFirst(); it.getInt(0) }
         return count("SELECT COUNT(*) FROM observations WHERE post_key=? AND state!='OBSERVED'",arrayOf(key)) == 0 &&
             count("SELECT COUNT(*) FROM observations WHERE creator=? AND reserved_at>?",arrayOf(creator,(now-86400000).toString())) == 0 &&
-            count("SELECT COUNT(*) FROM observations WHERE reserved_at>?",arrayOf((now-86400000).toString())) < 48 &&
+            count("SELECT COUNT(*) FROM observations WHERE reserved_at>?",arrayOf((now-86400000).toString())) < 12 &&
             count("SELECT COUNT(*) FROM observations WHERE reserved_at>?",arrayOf((now-45_000).toString())) == 0
     }
     @Synchronized fun reserve(key: String, creator: String, response: String, now: Long = System.currentTimeMillis()): Boolean {
@@ -57,10 +67,14 @@ class TikTokSocialStore(context: Context) : SQLiteOpenHelper(context, "amara_tik
         writableDatabase.execSQL("UPDATE observations SET state=? WHERE post_key=? AND state='RESERVED'",arrayOf(state,key))
     }
     data class Reconciliation(val key: String, val creator: String, val response: String)
-    fun nextReconciliation(now: Long = System.currentTimeMillis()): Reconciliation? {
+    fun nextReconciliation(now: Long = System.currentTimeMillis(), shopScope: String? = null, accountHandle: String? = null): Reconciliation? {
         readableDatabase.rawQuery("SELECT post_key,creator,response,payload FROM observations WHERE state IN ('UNCERTAIN','RESERVED') AND reserved_at<? ORDER BY reserved_at", arrayOf((now-3_600_000).toString())).use { c ->
             while(c.moveToNext()) {
                 val data=JSONObject(c.getString(3))
+                if (shopScope != null && (shopScope.isBlank() ||
+                    data.optString("reservation_shop_scope", data.optString("shop_scope")) != shopScope)) continue
+                if (accountHandle != null && (accountHandle.isBlank() ||
+                    !data.optString("reservation_account_handle", data.optString("account_handle")).equals(accountHandle, true))) continue
                 if(c.getString(2).isBlank() || data.optBoolean("reconciled_verified") || now-data.optLong("reconciled_at")<6*3_600_000L) continue
                 data.put("reconciled_at",now)
                 writableDatabase.execSQL("UPDATE observations SET payload=? WHERE post_key=?",arrayOf(data.toString(),c.getString(0)))
@@ -75,11 +89,13 @@ class TikTokSocialStore(context: Context) : SQLiteOpenHelper(context, "amara_tik
         data.put("reconciled_at",now).put("reconciled_verified",verified)
         writableDatabase.execSQL("UPDATE observations SET payload=? WHERE post_key=?",arrayOf(data.toString(),key))
     }
-    fun recentLearning(limit: Int = 8): JSONArray {
+    fun recentLearning(limit: Int = 8, shopScope: String? = null): JSONArray {
         val rows=JSONArray()
-        readableDatabase.rawQuery("SELECT payload,state FROM observations ORDER BY observed_at DESC LIMIT ?",arrayOf(limit.coerceIn(1,20).toString())).use { c ->
-            while(c.moveToNext()) {
-                val data=JSONObject(c.getString(0)); val decision=data.optJSONObject("decision") ?: continue
+        readableDatabase.rawQuery("SELECT payload,state FROM observations ORDER BY observed_at DESC",null).use { c ->
+            while(rows.length() < limit.coerceIn(1,20) && c.moveToNext()) {
+                val data=JSONObject(c.getString(0))
+                if (shopScope != null && data.optString("shop_scope") != shopScope) continue
+                val decision=data.optJSONObject("decision") ?: continue
                 rows.put(JSONObject().put("caption_excerpt",data.optString("caption").take(180))
                     .put("action",decision.optString("action")).put("relevance",decision.optDouble("relevance",0.0))
                     .put("evidence",decision.optString("evidence").take(180))

@@ -23,8 +23,13 @@ object InboundWorkProposer {
                 co.sanaa.agent.core.Classification.UNKNOWN,co.sanaa.agent.core.CommercialConsent.UNKNOWN,emptyMap(),
                 "WhatsApp notification origin",null))
             if(entry==null || !runtime.groupSettings.allows(entry,"listen")) return
-            if(runtime.groupSettings.observe(entry.id,inbound.signature,observedAt))
-                runtime.chatStore.storeMessage(entry.id,inbound.sender,"received",inbound.message)
+            // Group speakers are tracked inside the group; the original notification
+            // message time (not observation time) is kept as the event's original time.
+            runtime.verifiedConversationKey(entry.id)?.let { scopedKey ->
+                if(runtime.groupSettings.observe(entry.id,inbound.signature,observedAt))
+                    runtime.chatStore.storeMessage(scopedKey,inbound.sender,"received",inbound.message,
+                        originalAt = inbound.messageTimestamp.takeIf { it>0 } ?: observedAt)
+            }
             if(!runtime.groupSettings.allows(entry,"reply") || !runtime.groupSettings.acceptsReply(entry,inbound.message)) return
         }
         if (!runtime.config.whatsAppAutomationEnabled || !runtime.config.whatsAppInboundEnabled) return
@@ -34,6 +39,30 @@ object InboundWorkProposer {
         if (inbound.target.isBlank() || inbound.target.equals("WhatsApp", true) ||
             inbound.target.equals("Unknown", true) || inbound.message.startsWith("Sending ", true) ||
             (!inbound.isMissedCall && WhatsAppNotificationParser.isNonConversationalEvent(inbound.message))) return
+        // An observed scheduling phrase is a candidate only. Neither a proposed
+        // time nor an AI reply is evidence that both people agreed to a meeting.
+        if (!inbound.isGroup && Regex("\\b(meet|meeting|appointment|callback|call me)\\b", RegexOption.IGNORE_CASE)
+                .containsMatchIn(inbound.message)) {
+            runtime.verifiedConversationKey(inbound.conversationIdentity.ifBlank { inbound.target })?.let { key ->
+                runCatching {
+                    co.sanaa.agent.core.CommitmentStore(runtime.applicationContext).use { store ->
+                        val id = "wa-candidate:${ContentHashing.hash(inbound.signature)}"
+                        if (store.byId(id) == null) store.upsert(co.sanaa.agent.core.Commitment(
+                            id = id, conversationKey = key,
+                            participants = org.json.JSONArray().put(org.json.JSONObject()
+                                .put("name", inbound.sender).put("target", "")),
+                            type = "meeting", subject = inbound.message.take(180), agreedAt = 0,
+                            timezone = "", originalPhrase = inbound.message.take(300),
+                            sourceMessages = org.json.JSONArray().put(inbound.signature),
+                            confirmationStatus = co.sanaa.agent.core.CommitmentStore.Confirmation.CLARIFICATION_NEEDED,
+                            location = "", link = "", nextAction = "Confirm date, timezone, participant and agreement",
+                            reminderLeadMinutes = 5, revision = 0, reminderRecipients = "owner",
+                            createdAt = 0, updatedAt = 0,
+                        ), "Observed possible scheduling request; not confirmed")
+                    }
+                }
+            }
+        }
         val offered=runtime.workQueue.offer(
             WorkItem(
                 dedupeKey = "wa-inbound:${ContentHashing.hash(inbound.signature)}",
@@ -42,7 +71,8 @@ object InboundWorkProposer {
                 payload = JSONObject()
                     .put("inbound", true)
                     .put("sender", inbound.sender)
-                    .put("manager_command_candidate", !inbound.isGroup && runtime.actions.isManagerCandidate(runtime.config.managerWhatsApp,inbound.sender,inbound.senderPhone))
+                    .put("sender_phone", inbound.senderPhone)
+                    .put("manager_command_candidate", !inbound.isGroup && !inbound.isMissedCall && runtime.actions.isManagerCandidate(runtime.config.managerWhatsApp,inbound.sender,inbound.senderPhone))
                     .put("message", inbound.message)
                     .put("conversation", inbound.conversation)
                     .put("conversation_identity", inbound.conversationIdentity)

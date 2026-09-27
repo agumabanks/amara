@@ -21,6 +21,12 @@ import kotlinx.coroutines.launch
 /** Shell-only calibration hook. Android's DUMP permission prevents third-party apps from invoking it. */
 class ProofOfConceptReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        // DUMP-protected, bounded scheduling hold only. Does not cancel in-flight
+        // actions, change owner power, or expose any production canary/send hook.
+        if (intent.action == "co.sanaa.agent.action.TEST_INSPECTION_PAUSE") {
+            AgentRuntime.get(context).workLoop.pauseForInspection(intent.getLongExtra("duration_ms", 180_000))
+            return
+        }
         // Shell-only calibration hook. Compile-isolated from release builds so no POC
         // path can bypass the universal side-effect boundary in production.
         // Read-only export remains available to ADB shell (receiver requires DUMP).
@@ -31,7 +37,16 @@ class ProofOfConceptReceiver : BroadcastReceiver() {
                     val runtime = AgentRuntime.get(context).awaitReady()
                     runtime.evaluation.record("queue_inspection", fields = org.json.JSONObject()
                         .put("queue", runtime.workQueue.evaluationSnapshot())
+                        .put("nightly_doctor", org.json.JSONObject(co.sanaa.agent.core.work.NightlyDoctorCleanup.diagnostics(context)))
                         .put("loop", org.json.JSONObject(runtime.workLoop.diagnostics())))
+                    runtime.evaluation.record("model_failure_summary", fields = org.json.JSONObject()
+                        .put("failures", org.json.JSONArray().apply {
+                            runtime.memory.recentBrainFailures(20).forEach { row ->
+                                put(org.json.JSONObject().put("at", row.createdAt).put("stage", row.stage)
+                                    .put("disposition", row.disposition).put("terminal_outcome", row.terminalOutcome)
+                                    .put("retryable", row.retryable).put("attempts", row.attemptCount))
+                            }
+                        }))
                     runtime.evaluation.record("tiktok_sound_surface", fields = runtime.actions.tikTokSoundDiagnostics())
                     co.sanaa.agent.core.shorts.ShortsQueue(context).use { queue ->
                         val sources = org.json.JSONArray()
@@ -53,22 +68,52 @@ class ProofOfConceptReceiver : BroadcastReceiver() {
             }
             return
         }
-        if (!co.sanaa.agent.BuildConfig.DEBUG) return
+        if (intent.action == "co.sanaa.agent.action.CLEAR_PREUPDATE_TIKTOK_BREAKERS") {
+            val pending = goAsync()
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val runtime = AgentRuntime.get(context).awaitReady()
+                    val updated = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+                    val kinds = setOf(
+                        co.sanaa.agent.core.work.WorkKind.TIKTOK_POST_PUBLISH,
+                        co.sanaa.agent.core.work.WorkKind.TIKTOK_COMMENT_REPLY,
+                    )
+                    val cleared = runtime.safetyGovernor.clearCooldownsTrippedBefore(kinds, updated)
+                    val released = runtime.workQueue.releaseOwnerTikTokDeferrals()
+                    runtime.evaluation.record("owner_tiktok_breakers_cleared", fields = org.json.JSONObject()
+                        .put("build_updated_at", updated).put("cooldowns_cleared", cleared)
+                        .put("owner_tasks_released", org.json.JSONArray(released)))
+                    runtime.workLoop.wake(co.sanaa.agent.core.work.WakeReason.ExternalEvent("owner_tiktok_breaker_clear", ""))
+                    Log.i(TAG, "Pre-update TikTok breakers cleared=$cleared ownerTasksReleased=${released.size}")
+                } finally { pending.finish() }
+            }
+            return
+        }
+        // Shell-only and read-only (receiver requires android.permission.DUMP):
+        // keep this available in release certification so profile parsing can be
+        // proven without publishing a comment or changing account state.
         if(intent.action == "co.sanaa.agent.action.TEST_SOCIAL_SURFACE_READ") {
             val pending=goAsync()
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     val runtime=AgentRuntime.get(context).awaitReady()
-                    val surface=co.sanaa.agent.actions.TikTokSocialSurface(runtime.actions)
-                    val profile=surface.profile()
-                    val home=if(profile!=null) surface.home() else false
-                    val post=if(home) surface.readPost() else null
+                    runtime.workLoop.pauseForInspection(120_000)
+                    var profile: org.json.JSONObject? = null
+                    var home = false
+                    var post: co.sanaa.agent.actions.TikTokSocialSurface.Post? = null
+                    runtime.queue.withExclusiveDeviceAction {
+                        val surface=co.sanaa.agent.actions.TikTokSocialSurface(runtime.actions)
+                        profile=surface.profile()
+                        home=if(profile!=null) surface.home() else false
+                        post=if(home) surface.readPost() else null
+                    }
                     Log.i(TAG,"Social surface read: profile=${profile?.optString("handle")} home=$home postReadable=${post!=null}")
                     runtime.evaluation.record("social_surface_read",fields=org.json.JSONObject().put("profile_readable",profile!=null).put("post_readable",post!=null))
                 } finally { pending.finish() }
             }
             return
         }
+        if (!co.sanaa.agent.BuildConfig.DEBUG) return
         if(intent.action == "co.sanaa.agent.action.TEST_GROUP_REPAIR_READ") {
             val target=intent.getStringExtra("target").orEmpty()
             if(target.isBlank()) return
@@ -339,10 +384,6 @@ class ProofOfConceptReceiver : BroadcastReceiver() {
                     }
                 } finally { pending.finish() }
             }
-            return
-        }
-        if (intent.action == "co.sanaa.agent.action.TEST_INSPECTION_PAUSE") {
-            AgentRuntime.get(context).workLoop.pauseForInspection(intent.getLongExtra("duration_ms", 180_000))
             return
         }
         if (intent.action == "co.sanaa.agent.action.TEST_JUMIA_REPAIR") {

@@ -5,7 +5,7 @@ import org.junit.Test
 
 class BusinessChannelPolicyTest {
     @Test fun scopedWhatsAppCanResumeButOldDraftsAndOtherChannelsCannot() {
-        for (channel in listOf(CapabilityIds.REPLY_WHATSAPP, CapabilityIds.BROADCAST_GROUP_WHATSAPP, CapabilityIds.POST_TIKTOK, CapabilityIds.POST_TIKTOK_STORY, CapabilityIds.APPLY_SOKO_EDIT)) {
+        for (channel in listOf(CapabilityIds.TIKTOK_PUBLIC_COMMENT, CapabilityIds.REPLY_WHATSAPP, CapabilityIds.BROADCAST_GROUP_WHATSAPP, CapabilityIds.POST_TIKTOK, CapabilityIds.POST_TIKTOK_STORY, CapabilityIds.APPLY_SOKO_EDIT)) {
             assertNull(BusinessChannelPolicy.shopBlocker(channel,mapOf("shop_scope" to "1:2"),"1:2"))
             assertNotNull(BusinessChannelPolicy.shopBlocker(channel,emptyMap(),"1:2"))
             assertNotNull(BusinessChannelPolicy.shopBlocker(channel,mapOf("shop_scope" to "1:3"),"1:2"))

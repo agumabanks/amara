@@ -32,6 +32,14 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
         return candidates.firstOrNull()?.let(::tap) ?: false
     }
     private fun text(id: String) = nodes(id).map { it.text?.toString().orEmpty().trim() }.filter(String::isNotBlank).distinct()
+    private fun ownerHeaderHandle(profileNodes: List<AccessibilityNodeInfo>): String? {
+        val labels = profileNodes.map(::label)
+        if (!co.sanaa.agent.core.social.TikTokProfileIdentity.hasOwnerControls(labels)) return null
+        return profileNodes.filter {
+            it.viewIdResourceName in setOf("$PACKAGE:id/t1b", "$PACKAGE:id/t2z", "$PACKAGE:id/t3a", "$PACKAGE:id/t9q", "$PACKAGE:id/username")
+        }.map(::label).filter { it.matches(Regex("@[A-Za-z0-9._]{2,40}")) }.distinct().singleOrNull()
+            ?: co.sanaa.agent.core.social.TikTokProfileIdentity.handle(labels)
+    }
     private fun tap(node: AccessibilityNodeInfo): Boolean {
         if(node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
         val bounds=Rect().also(node::getBoundsInScreen);val window=root()?.let { Rect().also(it::getBoundsInScreen) } ?: return false
@@ -41,7 +49,9 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
         if(!actions.openTikTok() || actions.waitForForegroundPackage(PACKAGE)==null) return null
         // Navigate by the visible tab; do not use an obfuscated ID to decide to press Back.
         for(attempt in 0 until 12) {
-            if (co.sanaa.agent.core.social.TikTokProfileIdentity.handle(visible().map(::label)) != null) break
+            // Feed captions often contain @mentions. They are not profile identity
+            // and must never stop navigation before owner controls are present.
+            if (ownerHeaderHandle(visible()) != null) break
             val tab = visible().firstOrNull { label(it).equals("Profile", true) && !Rect().also(it::getBoundsInScreen).isEmpty }
             if (tab != null) {
                 val bounds = Rect().also(tab::getBoundsInScreen)
@@ -61,8 +71,8 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
         var display: String? = null
         for(wait in 0 until 40) {
             profileNodes=visible()
-            handle=co.sanaa.agent.core.social.TikTokProfileIdentity.handle(profileNodes.map(::label))
-            display=profileNodes.filter { it.viewIdResourceName in setOf("$PACKAGE:id/t0u","$PACKAGE:id/su7") }
+            handle = ownerHeaderHandle(profileNodes)
+            display=nodes("profile_name")
                 .map(::label).filter(String::isNotBlank).distinct().singleOrNull()
             if(handle != null) break
             // A dispatched gesture is not proof that navigation completed. Retry the
@@ -77,7 +87,7 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
             delay(400)
         }
         if(handle == null) {
-            android.util.Log.w("SanaaAgentSocial", "Own profile incomplete: nodes=${profileNodes.size} edit=${profileNodes.any { label(it) in setOf("Edit","Edit profile") }} handle=${handle != null} display=${display != null}")
+            android.util.Log.w("SanaaAgentSocial", "Own profile incomplete: nodes=${profileNodes.size} edit=${profileNodes.any { label(it).equals("Edit",true) || label(it).equals("Edit profile",true) }} header_handle_missing=true display=${display != null}")
             return null
         }
         val result=JSONObject().put("handle",handle).put("display_name",display ?: handle.removePrefix("@"))
@@ -87,10 +97,13 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
         }
         return result
     }
+    private fun homeVisible(): Boolean = visible().any { it.isSelected && it.isClickable && label(it).equals("Home", true) } &&
+        nodes("user_avatar").isNotEmpty()
+
     suspend fun home(): Boolean {
         if(!actions.openTikTok() || actions.waitForForegroundPackage(PACKAGE)==null) return false
         for(attempt in 0 until 6) {
-            if(text("desc").isNotEmpty() && nodes("user_avatar").isNotEmpty()) return true
+            if(homeVisible()) return true
             val tab=visible().firstOrNull { label(it).equals("Home",true) && !Rect().also(it::getBoundsInScreen).isEmpty }
             if(tab != null) {
                 val bounds=Rect().also(tab::getBoundsInScreen)
@@ -98,11 +111,14 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
             } else actions.globalBack()
             delay(800)
         }
-        return text("desc").isNotEmpty() && nodes("user_avatar").isNotEmpty()
+        return homeVisible()
     }
     suspend fun search(query: String): Boolean {
         if(query.isBlank() || query.length>80 || !home()) return false
-        if(!actions.clickExactLabel("Search")) return false
+        // The feed also has a contextual Search label near the caption. Use the
+        // observed global search control, never the first matching label.
+        val globalSearch=nodes("global_search").singleOrNull { it.isClickable && it.isEnabled && (label(it).equals("Search",true) || (it.viewIdResourceName == "$PACKAGE:id/k_8" && label(it).isBlank())) } ?: return false
+        if(!tap(globalSearch)) return false
         delay(600)
         if(root()==null || !actions.setFirstEditableField(query)) return false
         delay(300)
@@ -135,23 +151,35 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
         return false
     }
     suspend fun readPost(): Post? {
-        // Expanding the feed description exposes the full creator/post and comment sheet.
-        if(text("efv").isEmpty()) nodes("desc").singleOrNull()?.let {
-            tap(it)
-            for(wait in 0 until 16) {
-                if(root()==null || text("efv").isNotEmpty()) break
-                delay(400)
+        // Home can become selected before TikTok populates the feed. Wait for
+        // both post fields instead of treating its empty shell as a bad caption.
+        // Only an actual description can be expanded, and only once.
+        var expanded=false
+        var caption: String? = null
+        var creator: String? = null
+        for(wait in 0 until 20) {
+            if(root()==null) break
+            caption=TikTokSocialText.caption(::text)
+            creator=TikTokSocialText.creator(::text)
+            if(caption!=null && creator!=null) break
+            if(!expanded && caption==null) nodes("desc").singleOrNull()?.let {
+                expanded=tap(it)
             }
+            delay(400)
         }
-        val caption=text("efv").singleOrNull()?.takeIf { it.length>=20 && it.length<=2200 } ?: return null
-        val creator=text("user_name").singleOrNull() ?: return null
+        if (caption == null || creator == null) {
+            android.util.Log.i("SanaaAgentSocial", "Post unreadable: package=${root()?.packageName} desc=${text("desc").size} old_expanded=${text("efv").size} new_body=${text("skr").size} old_creator=${text("user_name").size} new_creator=${text("k2w").size} avatar=${nodes("user_avatar").size}")
+            return null
+        }
         return Post(creator,caption,text("f15").take(8).map { it.take(240) })
     }
-    private fun samePost(post: Post): Boolean = text("user_name").singleOrNull()==post.creator && text("efv").singleOrNull()==post.caption
+    private fun samePost(post: Post): Boolean = TikTokSocialText.creator(::text)==post.creator &&
+        TikTokSocialText.caption(::text)==post.caption
     suspend fun next(): Boolean {
         if(root()==null) return false
         if(nodes("ywb").isNotEmpty()) { tap(nodes("ywb").first());delay(400) }
-        if(root()==null || text("desc").isEmpty()) return false
+        else if(nodes("skr").isNotEmpty()) { actions.globalBack();delay(400) }
+        if(root()==null || (text("desc").isEmpty() && !homeVisible())) return false
         return actions.swipeUpAndConfirm(PACKAGE)
     }
     @RequiresTransaction(reason = "public TikTok comment")
@@ -159,40 +187,63 @@ class TikTokSocialSurface(private val actions: AccessibilityActions) {
         if(!samePost(post) || text("f15").any { ContentHashing.normalize(it)==ContentHashing.normalize(response) }) return false
         val entry=nodes("l8h").singleOrNull() ?: return false
         if(!tap(entry)) return false
-        delay(500)
-        val editor=nodes("eg4").singleOrNull()?.takeIf { it.isEditable } ?: return false
-        if(!editor.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,response) })) return false
+        var editor: AccessibilityNodeInfo? = null
+        for(wait in 0 until 12) {
+            editor=nodes("eg4").singleOrNull()?.takeIf { it.isEditable }
+            if(editor != null) break
+            delay(250)
+        }
+        val boundEditor=editor ?: return false
+        if(!boundEditor.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,response) })) return false
         delay(400)
-        if(!samePost(post) || nodes("eg4").singleOrNull()?.text?.toString()!=response) return false
+        // The TPS comment sheet intentionally hides the underlying feed nodes.
+        // It is still bound to the exact post proven immediately before opening;
+        // require the unique sheet/editor transition and exact staged text.
+        val sheetBound = samePost(post) || nodes("comment_header").size == 1
+        if(!sheetBound || nodes("eg4").singleOrNull()?.text?.toString()!=response) return false
         val send=nodes("cz_").singleOrNull()?.takeIf { it.isEnabled } ?: return false
         return tap(send)
     }
+    private fun exactCommentVisible(response: String, ownName: String): Boolean {
+        val wantedText=ContentHashing.normalize(response)
+        val wantedAuthor=ContentHashing.normalize(ownName)
+        for(comment in nodes("f15").filter { ContentHashing.normalize(it.text?.toString().orEmpty())==wantedText }) {
+            var row=comment.parent
+            repeat(5) {
+                val container=row
+                if(container!=null) {
+                    val authors=container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/title")
+                        .map { ContentHashing.normalize(it.text?.toString().orEmpty()) }.distinct()
+                    val texts=TikTokSocialControls.ids("f15")
+                        .flatMap { container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/$it") }
+                        .map { ContentHashing.normalize(it.text?.toString().orEmpty()) }.distinct()
+                    val statuses=TikTokSocialControls.ids("ekn")
+                        .flatMap { container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/$it") }
+                        .map { it.text?.toString().orEmpty() }
+                    if(authors.size==1 && authors.single()==wantedAuthor && texts.size==1 && texts.single()==wantedText &&
+                        statuses.isNotEmpty() && statuses.none { it.contains("sending",true) || it.contains("failed",true) })
+                        return true
+                }
+                row=row?.parent
+            }
+        }
+        return false
+    }
     suspend fun verify(post: Post,response: String,ownName: String): VerificationEvidence {
         repeat(12) {
-            // Send can dismiss or rebuild the expanded-caption sheet. Restore only
-            // the current video's caption surface and re-prove exact identity.
-            if(!samePost(post)) {
-                if(root()==null) return VerificationEvidence.impossible("TikTok foreground lost",PACKAGE)
-                if(nodes("eg4").isNotEmpty()) { actions.globalBack();delay(350) }
+            if(root()==null) return VerificationEvidence.impossible("TikTok foreground lost",PACKAGE)
+            val commentSurface = nodes("eg4").isNotEmpty() || nodes("comment_header").isNotEmpty()
+            if(!commentSurface) {
                 val reopened=readPost()
-                if(reopened!=null && reopened.key!=post.key) return VerificationEvidence.impossible("TikTok post identity changed",PACKAGE)
+                if(reopened!=null && reopened.key!=post.key)
+                    return VerificationEvidence.impossible("TikTok post identity changed",PACKAGE)
                 if(!samePost(post)) { delay(500); return@repeat }
+                val entry=nodes("l8h").singleOrNull()
+                if(entry==null || !tap(entry)) { delay(500);return@repeat }
+                delay(500)
             }
-            for(comment in nodes("f15").filter { ContentHashing.normalize(it.text?.toString().orEmpty())==ContentHashing.normalize(response) }) {
-                var row=comment.parent
-                repeat(4) {
-                    val container=row
-                    if(container!=null) {
-                        val authors=container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/title").map { it.text?.toString().orEmpty() }.distinct()
-                        val texts=TikTokSocialControls.ids("f15").flatMap { container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/$it") }.map { it.text?.toString().orEmpty() }.distinct()
-                        val statuses=TikTokSocialControls.ids("ekn").flatMap { container.findAccessibilityNodeInfosByViewId("$PACKAGE:id/$it") }.map { it.text?.toString().orEmpty() }
-                        if(authors.size==1 && authors.single()==ownName && texts.size==1 && statuses.isNotEmpty() &&
-                            statuses.none { it.contains("sending",true) || it.contains("failed",true) })
-                            return VerificationEvidence(true,0.9,PACKAGE,"comment_visible",System.currentTimeMillis())
-                    }
-                    row=row?.parent
-                }
-            }
+            if(exactCommentVisible(response,ownName))
+                return VerificationEvidence(true,0.9,PACKAGE,"comment_visible",System.currentTimeMillis())
             delay(500)
         }
         actions.captureScreenshot("tiktok_comment_unverified_${post.key.take(12)}")

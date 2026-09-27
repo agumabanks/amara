@@ -12,6 +12,7 @@ class MarketGrowthReview(private val memory: AmaraMemory, private val market: Ma
     fun review(offerings: List<SokoListing>): JSONObject {
         market.recordReview(offerings)
         val decisions = JSONArray()
+        val comparisons = JSONArray()
         var drafts = 0
         for (item in offerings) {
             val issues = co.sanaa.agent.modules.ServiceListingChecklist.missing(item).toMutableList()
@@ -22,6 +23,10 @@ class MarketGrowthReview(private val memory: AmaraMemory, private val market: Ma
             if (clean != item.description) issues += "Clean existing description formatting without changing product facts"
             if (clean.length < 80) issues += "Confirm specifications, scope, delivery terms and buyer questions before expanding the description"
             val position = market.compareOurProduct(item.title, item.priceUgx.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+            comparisons.put(JSONObject().put("listingId", item.id).put("title", item.title)
+                .put("type", GrowthStore.typeOf(item)).put("ownPriceUgx", item.priceUgx)
+                .put("comparableOffers", position.competitorCount).put("marketAverageUgx", position.marketAvgUgx)
+                .put("marketMinimumUgx", position.marketMinUgx).put("marketMaximumUgx", position.marketMaxUgx))
             if (position.competitorCount >= 3) issues += position.recommendation
             if (issues.isEmpty()) continue
             val evidence = JSONObject().put("listingId", item.id).put("ownTitle", item.title)
@@ -50,13 +55,34 @@ class MarketGrowthReview(private val memory: AmaraMemory, private val market: Ma
                 JSONObject().put("observed", opportunity.description).toString(), next)
         }
         val report = JSONObject().put("generatedAt", System.currentTimeMillis()).put("offeringsReviewed", offerings.size)
-            .put("sourcingBriefs", briefs).put("decisions", decisions).put("exactTextDrafts", drafts)
+            .put("sourcingBriefs", briefs).put("decisions", decisions).put("comparisons", comparisons).put("exactTextDrafts", drafts)
             .put("summary", "Reviewed ${offerings.size} products and services; ${decisions.length()} listing improvement plans; $drafts exact text drafts. Verified sales and costs, not posting volume, determine business growth.")
             .put("newListingRule", "Prepare sourcing/creation briefs from market evidence; publish only after business ownership, supplier, original media, price, stock or service capacity are verified. Terminal login is required for writes.")
         store.saveReport(report)
         return report
     }
     companion object {
+        /** Keep the decision instructions intact within the WhatsApp report size limit. */
+        fun managerMessage(report: JSONObject): String = buildString {
+            append("Market review of your products and services\n")
+            append("Competitor asking prices observed within 7 days; these are not verified sales.\n")
+            val comparisons = report.optJSONArray("comparisons") ?: JSONArray()
+            var included = 0
+            for (i in 0 until comparisons.length()) {
+                val row = comparisons.getJSONObject(i)
+                val price = row.optLong("ownPriceUgx")
+                val count = row.optInt("comparableOffers")
+                val line = "${row.optString("title").take(100)}: ours " +
+                    (if (price > 0) "UGX $price" else "price not confirmed") +
+                    if (count >= 3) "; $count comparable offers, UGX ${row.optLong("marketMinimumUgx")}-${row.optLong("marketMaximumUgx")}, average ${row.optLong("marketAverageUgx")}.\n"
+                    else "; only $count comparable offers, insufficient price evidence.\n"
+                if (length + line.length > 1150) break
+                append(line); included++
+            }
+            if (included < comparisons.length()) append("${comparisons.length() - included} more offerings in Amara Market.\n")
+            append("Keep current prices, or reply with the exact offering and new UGX price to prepare a Soko Terminal edit. Confirm matching specifications, condition, service unit and margin first. Prices stay unchanged until an exact edit is approved and its save verified.")
+        }
+
         fun plainText(value: String): String = value.replace(Regex("<[^>]+>"), " ")
             .replace("&nbsp;", " ").replace("&amp;", "&")
             .replace("&#039;", "'").replace("&#39;", "'").replace("&apos;", "'")

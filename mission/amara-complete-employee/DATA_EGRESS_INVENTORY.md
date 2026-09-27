@@ -15,6 +15,9 @@ model output or untrusted content.
 | 6 | `POST /api/agent/generate-ad` | Owner backend | Ad creative generation | device_id, full Soko listing raw record | Business listing data | agent token | **`artifactUploadOptIn`** | **OFF** | Backend-side | none beyond opt-in gate |
 | 7 | `POST api.groq.com/chat/completions` (text) | Groq (model provider) | Planning/caption/reply generation | system+user prompts (business memory context, owner task, untrusted envelopes), model name | Business context + untrusted excerpts | Groq API key (header) | implicit: any AI feature use discloses provider; key entered by owner | ON when key configured | none stored by Amara | prompts embed redacted/enveloped content only |
 | 8 | `POST api.groq.com` (vision) | Groq (model provider) | Listing screenshot analysis | base64 screenshot + prompt | Screen imagery | Groq API key | **`visionConsent`** | **OFF** | none stored by Amara | prompt text only |
+| 9 | `POST /api/agent/heartbeat` | Owner backend | Show current device health | device_id, app version, uptime, Accessibility bound, known pending count, known battery percent, charging | Device health metadata | agent token | **`operationalReportingEnabled`** and `configSyncEnabled` | **OFF** | Backend-side; existing heartbeat table | Allowlisted fields only; no conversations, listings or blocker text |
+| 10 | `POST /api/agent/shop-observation` | Owner backend | Keep the observed device shop current after a Terminal account switch | device_id in body; short-lived signed Terminal assertion in header containing seller ID, shop ID, shop name and expiry | Device/shop identity | agent token plus signed Terminal proof | `configSyncEnabled` and owner On | ON while Amara is On | Backend device observation | No catalogue, customer or message content; server verifies signature and device credential |
+| 11 | `POST /api/agent/events` | Owner backend | Replay durable work outcomes to the shop/device graph | device ID; event/installation/boot IDs; sequence; signed shop binding revision; salted job/attempt IDs; action time; work kind/status; categorical failure and duration | Work evidence metadata | agent token | **`telemetryOptIn`**, `configSyncEnabled` and owner On | **OFF** | Bounded local SQLite outbox until acknowledgement; backend retention policy pending | No customer messages, raw prompts, phone numbers or product content; server enforces allowlisted scalar facts |
 
 ## Compartmentalization rules enforced in code
 
@@ -37,7 +40,7 @@ model output or untrusted content.
 
 ## Known limitations
 
-- Rules 1–6 go to the owner-configured backend over HTTPS; its server-side retention is
+- Rules 1–6 and 9–11 go to the owner-configured backend over HTTPS; its server-side retention is
   outside this repository's control and is disclosed as "unknown".
 - ANDROID_ID (rule 1) is a stable device identifier; it cannot be redacted without
   breaking registration. Disclosed rather than hidden.

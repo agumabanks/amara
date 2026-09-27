@@ -69,6 +69,11 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
         get() = prefs.getBoolean("telemetry_opt_in", false)
         set(value) { prefs.edit().putBoolean("telemetry_opt_in", value).apply() }
 
+    /** Separate owner consent for device-health heartbeat facts on Cards. */
+    var operationalReportingEnabled: Boolean
+        get() = prefs.getBoolean("operational_reporting_enabled", false)
+        set(value) { prefs.edit().putBoolean("operational_reporting_enabled", value).apply() }
+
     /**
      * Independent control for configuration sync (register/config/status with the
      * owner's own backend). Default ON because registration is required for operation,
@@ -267,9 +272,29 @@ class SecureConfig(context: Context, useEncryptedPrefs: Boolean = true) {
         if (json.has("tiktok_social_enabled")) tikTokSocialEnabled = json.optBoolean("tiktok_social_enabled")
         if (json.has("tiktok_stories_enabled")) tikTokStoriesEnabled = json.optBoolean("tiktok_stories_enabled")
         if (json.has("tiktok_notification_replies_enabled")) tikTokNotificationRepliesEnabled = json.optBoolean("tiktok_notification_replies_enabled")
+        if (json.has("remote_command_revision")) remoteCommandRevision = json.optLong("remote_command_revision", 0L)
+        if (json.has("remote_work_paused")) remoteWorkPaused = json.optBoolean("remote_work_paused", false)
+        if (json.has("system_lockout")) systemLockout = json.optBoolean("system_lockout", false)
+        if (json.has("system_lockout_reason")) systemLockoutReason = json.optString("system_lockout_reason", "")
         json.optJSONArray("whatsapp_groups")?.let { whatsAppGroupsJson = it.toString() }
         json.optJSONArray("monitored_whatsapp")?.let { monitoredWhatsAppJson = it.toString() }
     }
+
+    var remoteCommandRevision: Long
+        get() = prefs.getLong("remote_command_revision", 0L)
+        set(value) { prefs.edit().putLong("remote_command_revision", value).apply() }
+
+    var remoteWorkPaused: Boolean
+        get() = prefs.getBoolean("remote_work_paused", false)
+        set(value) { prefs.edit().putBoolean("remote_work_paused", value).apply() }
+
+    var systemLockout: Boolean
+        get() = prefs.getBoolean("system_lockout", false)
+        set(value) { prefs.edit().putBoolean("system_lockout", value).apply() }
+
+    var systemLockoutReason: String
+        get() = prefs.getString("system_lockout_reason", "") ?: ""
+        set(value) { prefs.edit().putString("system_lockout_reason", value.take(240)).apply() }
 
     fun monitoredWhatsAppTargets(): Set<String> = runCatching {
         val array = org.json.JSONArray(monitoredWhatsAppJson)

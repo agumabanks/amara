@@ -23,7 +23,7 @@ class MemoryBackupManager(
             .put("relationship_memory", chats.exportMemory())
             .put("learning_memory", learning.exportMemory())
             .put("tiktok_social", social?.exportMemory())
-        backend.saveMemorySnapshot(snapshot)
+        backend.saveMemorySnapshot(MemorySnapshotCodec.encode(snapshot))
         config.lastMemoryBackupAt = System.currentTimeMillis()
         return Result(true, "Encrypted cloud snapshot saved", chats.summaryCount())
     }
@@ -31,8 +31,8 @@ class MemoryBackupManager(
     suspend fun restoreLatest(): Result {
         if (!config.memoryBackupEnabled) return Result(false, "Cloud memory backup is off", 0)
         val envelope = backend.latestMemorySnapshot()
-        val snapshot = envelope.optJSONObject("snapshot") ?: return Result(false, "No backup exists yet", 0)
-        if (snapshot.optInt("schema_version") != 1) return Result(false, "Unsupported backup version", 0)
+        val stored = envelope.optJSONObject("snapshot") ?: return Result(false, "No backup exists yet", 0)
+        val snapshot = MemorySnapshotCodec.decode(stored)
         val chatCount = chats.importMemory(snapshot.optJSONObject("relationship_memory") ?: JSONObject())
         val learningCount = learning.importMemory(snapshot.optJSONObject("learning_memory") ?: JSONObject())
         val socialCount = social?.importMemory(snapshot.optJSONObject("tiktok_social") ?: JSONObject()) ?: 0

@@ -6,6 +6,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TikTokProductContentTest {
+    @Test fun catalogueEligibilityMatchesContentValidation() {
+        val candidates = listOf(listing(), listing().copy(title=" "), listing().copy(id=""),
+            listing().copy(imageUrl=null), listing().copy(imageUrl="https://user:secret@soko24.co/image"),
+            listing().copy(imageUrl="file:///private/photo"), listing().copy(title="x".repeat(301))) +
+            listOf("", "null", "../other", "valid-slug").map { slug ->
+                listing().copy(raw=JSONObject().put("slug",slug))
+            }
+        candidates.forEach { assertEquals(TikTokProductContent.from(it) != null, TikTokProductContent.isEligible(it)) }
+    }
+    @Test fun persistedHeadlineKeepsStoryAndFeedFingerprintIdentical() {
+        val item = listing().copy(title = "Acme Premium Solid Oak Dining Table")
+        assertTrue(TikTokProductContent.isEligible(item))
+        val feed = TikTokProductContent.from(item, headline = "Dining Table")!!
+        val saved = AmaraAdSpec.fromJson(feed.ad.toJson())
+        val story = TikTokProductContent.from(item, headline = saved.headline)!!
+        assertEquals(feed.fingerprint, story.fingerprint)
+        assertEquals("Dining Table", story.ad.headline)
+    }
     @Test fun publicShopAddressAddsLocationTagsAndChangesContentBinding() {
         val original = TikTokProductContent.from(listing())!!
         val located = listing().copy(raw = JSONObject().put("slug", "office-chair-7").put("shop_address", "Nasser road Kampala"))
@@ -39,7 +57,7 @@ class TikTokProductContentTest {
 
     @Test fun anyChangedProductContentInvalidatesRetryBinding() {
         val original = TikTokProductContent.from(listing())!!.fingerprint
-        for (changed in listOf(listing().copy(title = "Desk"), listing().copy(description = "Red fabric"),
+        for (changed in listOf(listing().copy(title = "Office Desk"), listing().copy(description = "Red fabric"),
             listing().copy(imageUrl = "https://soko24.co/uploads/desk.jpg"), listing().copy(priceUgx = 42),
             listing().copy(raw = JSONObject().put("slug", "another-product")))) {
             assertNotEquals(original, TikTokProductContent.from(changed)!!.fingerprint)

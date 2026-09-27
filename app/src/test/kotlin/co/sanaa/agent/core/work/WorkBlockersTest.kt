@@ -18,7 +18,10 @@ class WorkBlockersTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private fun item(kind: WorkKind = WorkKind.TIKTOK_POST_PUBLISH) = WorkItem("task", Domain.TIKTOK, kind,
         baseValueKes = 1.0, urgencyHalfLifeHours = 1.0, estimatedScreenSeconds = 1)
-    @Before fun reset() { context.getSharedPreferences("work_blockers", Context.MODE_PRIVATE).edit().clear().commit() }
+    @Before fun reset() {
+        context.getSharedPreferences("work_blockers", Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences("battery_work_hold", Context.MODE_PRIVATE).edit().clear().commit()
+    }
 
     @Test fun failureSurvivesRestartAndUnrelatedSuccessUntilItsOwnSuccess() {
         val store = WorkBlockers(context)
@@ -41,8 +44,19 @@ class WorkBlockersTest {
         val count = manager.allNotifications.size
         store.refreshBattery(); assertEquals(count, manager.allNotifications.size)
         battery(15); store.refreshBattery(); assertEquals(1, store.rows().size)
-        battery(16); store.refreshBattery(); assertTrue(store.rows().isEmpty())
+        battery(16); store.refreshBattery(); assertEquals(1, store.rows().size)
+        battery(20); store.refreshBattery(); assertTrue(store.rows().isEmpty())
         assertEquals(count - 1, manager.allNotifications.size)
+    }
+
+    @Test fun batteryPauseSurvivesRestartAndUnknownReadings() {
+        val hold = BatteryWorkHold(context)
+        assertFalse(hold.observe(-1))
+        assertTrue(hold.observe(15))
+        assertTrue(BatteryWorkHold(context).observe(16))
+        assertTrue(BatteryWorkHold(context).observe(-1))
+        assertTrue(BatteryWorkHold(context).observe(19))
+        assertFalse(BatteryWorkHold(context).observe(20))
     }
 
     @Test fun admissionDoesNotEraseUnconfirmedFailureAndRedactsSecrets() {
@@ -72,19 +86,23 @@ class WorkBlockersTest {
         assertEquals("Original message unavailable",store.rows().single()["reason"])
     }
 
-    @Test fun legacyGroupAlertClearsOnlyAfterLaterSuccessAndLeavesEvidence() {
+    @Test fun groupSuccessClearsOnlyTheSameBoundIdentity() {
         val store=WorkBlockers(context)
         val target="Exact group"
         val oldKey="failure:WA_BROADCAST:${co.sanaa.agent.core.ContentHashing.hash("$target::")}"
         store.flag(oldKey,"Group","Old rejection",now=1000)
-        store.reconcileGroups(listOf(target to 500L))
+        val groupA = WorkBlockers.GroupPromotionEvidence("group-a",target,2000L)
+        store.reconcileGroups(listOf(groupA.copy(verifiedAt=500L)))
         assertTrue(store.rows().any { it["reason"]=="Old rejection" })
-        store.reconcileGroups(listOf(target to 2000L))
-        assertFalse(store.rows().any { it["reason"]=="Old rejection" })
+        val bound = item(WorkKind.WA_BROADCAST).copy(payload = org.json.JSONObject()
+            .put("group_id",groupA.id).put("group_target",target))
+        store.flag("failure:${WorkBlockers.scope(bound)}","Group","Bound group failure",now=1000)
+        store.reconcileGroups(listOf(groupA.copy(id="group-b")))
+        assertTrue(store.rows().any { it["reason"]=="Bound group failure" })
+        store.reconcileGroups(listOf(groupA))
+        assertFalse(store.rows().any { it["reason"]=="Bound group failure" })
+        assertTrue(store.rows().any { it["reason"]=="Old rejection" })
         assertTrue(store.resolved().any { it["evidence"].toString().contains("later group promotion") })
-        store.flag(oldKey,"Group","New failure",now=3000)
-        store.reconcileGroups(listOf(target to 2000L))
-        assertTrue(store.rows().any { it["reason"]=="New failure" })
     }
 
     @Test fun normalScheduleWaitDoesNotCreateDeliveryFailure() {
@@ -92,6 +110,22 @@ class WorkBlockersTest {
         store.outcome(WorkResult(item(WorkKind.WA_BROADCAST),WorkStatus.SKIPPED,
             failure=FailureInfo(FailureClass.POLICY_BLOCKED,"Group schedule is paused or not due",false)))
         assertTrue(store.rows().isEmpty())
+    }
+
+    @Test fun unresolvedGroupRecoveryKeepsOneVisibleBlockerWithoutFrequentAlerts() {
+        val store = WorkBlockers(context)
+        val key = "failure:WA_BROADCAST:bound-group"
+        val reason = "Group recovery check unresolved; no send attempted; next check in 30 minutes"
+        store.flag(key, "Group", reason, now = 1_000L)
+        store.flag(key, "Group", reason, now = 1_000L + 30 * 60_000L)
+        assertEquals(1, store.rows().size)
+        val row = org.json.JSONObject(context.getSharedPreferences("work_blockers", Context.MODE_PRIVATE)
+            .getString(key, "{}"))
+        assertEquals(1_000L, row.getLong("lastAlert"))
+        store.flag(key, "Group", reason, now = 1_000L + 6 * 60 * 60_000L)
+        assertEquals(1_000L + 6 * 60 * 60_000L, org.json.JSONObject(context
+            .getSharedPreferences("work_blockers", Context.MODE_PRIVATE).getString(key, "{}"))
+            .getLong("lastAlert"))
     }
 
     @Test fun droppedTaskDoesNotPromiseAutomaticRetry() {

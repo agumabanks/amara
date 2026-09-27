@@ -10,6 +10,9 @@ import co.sanaa.agent.core.CapabilityIds
 import co.sanaa.agent.api.SokoListing
 import kotlin.math.min
 import kotlin.math.pow
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /**
  * Interface for WorkExecutor to access runtime modules without circular dependency.
@@ -41,22 +44,16 @@ class WorkExecutor(
             co.sanaa.agent.core.AgentRuntime.get(context).modeManager.forWork(item.kind.name)
             if(Capability.SCREEN in item.requires &&
                 !item.payload.optBoolean("manager_report") && !item.payload.optBoolean("manager_command_candidate") &&
-                item.kind in setOf(WorkKind.WA_REPLY_INBOUND, WorkKind.WA_BROADCAST, WorkKind.WA_FOLLOWUP,
+                needsSharedShopRecovery(item) &&
+                item.kind in setOf(WorkKind.WA_REPLY_INBOUND, WorkKind.WA_BROADCAST, WorkKind.WA_FOLLOWUP, WorkKind.WA_MEETING_REMINDER,
                     WorkKind.TIKTOK_POST_PUBLISH, WorkKind.TIKTOK_STORY_PUBLISH, WorkKind.SOKO_AUDIT,
                     WorkKind.SOKO_INVENTORY_CHECK, WorkKind.SOKO_PRICE_ADJUST, WorkKind.SOKO_ORDER_CONFIRM)) {
-                val runtime = co.sanaa.agent.core.AgentRuntime.get(context)
-                co.sanaa.agent.core.ShopSessionRecovery(
-                    read={ co.sanaa.agent.core.TerminalShopIdentity.readFresh(context) },
-                    reopen={
-                        actions.openAppByName("soko terminal") &&
-                            actions.waitForForegroundPackage("com.soko24.soko_seller_terminal") != null
-                    },
-                    settle={ kotlinx.coroutines.delay(1000) },
-                ).ensure()
+                recoverTerminalShop()
             }
             when (item.kind) {
                 // WhatsApp
                 WorkKind.WA_FOLLOWUP -> executeWhatsAppFollowUp(item)
+                WorkKind.WA_MEETING_REMINDER -> executeMeetingReminder(item)
                 WorkKind.WA_REPLY_INBOUND -> executeWhatsAppReply(item)
                 WorkKind.WA_BROADCAST -> executeWhatsAppBroadcast(item)
                 // Soko
@@ -86,6 +83,12 @@ class WorkExecutor(
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
+        } catch (limited: co.sanaa.agent.api.SokoRateLimited) {
+            // Read-only preparation was throttled, not a failed publication.
+            // SKIPPED preserves the queue without feeding the publication breaker.
+            WorkResult(item, WorkStatus.SKIPPED, failure = FailureInfo(
+                FailureClass.TRANSIENT_NETWORK, limited.message.orEmpty(),
+                retryAfterMs = limited.retryAfterMs))
         } catch (full: co.sanaa.agent.actions.BoundTikTokMedia.MediaStoreFullException) {
             // A full evidence store is an owner-actionable resource condition, not a
             // publication failure; it must not feed the per-kind circuit breaker.
@@ -114,17 +117,33 @@ class WorkExecutor(
      */
     fun decideRecovery(item: WorkItem, result: WorkResult, attempt: Int): RecoveryDecision {
         val failure = result.failure ?: return RecoveryDecision.Drop
+        if (item.kind == WorkKind.WA_MEETING_REMINDER) return RecoveryDecision.Escalate(failure.summary)
         if (!failure.recoverable) return RecoveryDecision.Escalate(failure.summary)
+        failure.retryAfterMs?.let { return RecoveryDecision.Requeue(it.coerceIn(60_000L, 86_400_000L)) }
         if (item.kind == WorkKind.WA_REPLY_INBOUND) return inboundRecovery(attempt, failure.summary)
         return recoveryFor(failure.klass, failure.summary, attempt)
     }
 
     companion object {
+        internal fun needsSharedShopRecovery(item: WorkItem): Boolean =
+            item.kind != WorkKind.WA_BROADCAST || item.payload.optString("group_target").isBlank()
+
         internal fun classifyPreparationException(error: Exception): FailureClass = when (error) {
             is java.net.UnknownHostException, is java.net.ConnectException,
             is java.net.SocketTimeoutException -> FailureClass.TRANSIENT_NETWORK
             else -> FailureClass.UNKNOWN
         }
+        internal fun verifiedEffect(outcome: SideEffectOutcome): Boolean =
+            outcome is SideEffectOutcome.Verified || (outcome is SideEffectOutcome.DuplicateBlocked &&
+                outcome.existingState == co.sanaa.agent.core.SideEffectState.VERIFIED)
+        internal fun duplicateWhatsAppResult(item: WorkItem, outcome: SideEffectOutcome.DuplicateBlocked): WorkResult =
+            if (verifiedEffect(outcome)) WorkResult(item, WorkStatus.DONE,
+                outcomeFacts = listOf("Existing WhatsApp delivery was verified; no new send"))
+            else WorkResult(item, WorkStatus.ESCALATED, failure = FailureInfo(FailureClass.POLICY_BLOCKED,
+                "Existing WhatsApp dispatch is ${outcome.existingState}; delivery is not verified and must not be replayed", false))
+
+        internal fun ownerStoppedBeforeDispatch(outcome: SideEffectOutcome): Boolean =
+            outcome is SideEffectOutcome.Rejected && outcome.reason == "Amara is off by owner request"
         internal fun inboundRecovery(attempt: Int, summary: String): RecoveryDecision = when {
             attempt <= 1 -> RecoveryDecision.Requeue(5_000L)
             attempt == 2 -> RecoveryDecision.Requeue(20_000L)
@@ -134,18 +153,24 @@ class WorkExecutor(
         internal fun selectTikTokListing(
             listings: List<co.sanaa.agent.api.SokoListing>,
             recentTargetsNewestFirst: List<String>,
+            trendingListingIds: Set<String> = emptySet(),
             randomIndex: (Int) -> Int = { kotlin.random.Random.nextInt(it) },
         ): co.sanaa.agent.api.SokoListing? {
-            val usable = listings.filter { co.sanaa.agent.modules.TikTokProductContent.from(it) != null }
+            val usable = listings.distinctBy { it.id }.filter { co.sanaa.agent.modules.TikTokProductContent.isEligible(it) }
             if (usable.isEmpty()) return null
             val recent = recentTargetsNewestFirst.map { it.trim().lowercase() }
-            val fresh = usable.filter { it.title.trim().lowercase() !in recent }
+            fun seen(item: co.sanaa.agent.api.SokoListing) = item.id.lowercase() in recent || item.title.trim().lowercase() in recent
+            val fresh = usable.filterNot(::seen)
             if (fresh.isNotEmpty()) return fresh[randomIndex(fresh.size).coerceIn(0, fresh.lastIndex)]
 
-            // When every product has appeared, keep a rolling gap and randomize the
-            // older pool so the feed does not fall into an obvious fixed sequence.
-            val avoid = recent.take((usable.size / 3).coerceAtLeast(1)).toSet()
-            val recycled = usable.filter { it.title.trim().lowercase() !in avoid }.ifEmpty { usable }
+            // After a complete catalogue cycle, market-evidenced trends may be
+            // preferred, but even a trend cannot repeat inside the rolling gap.
+            val gap = (usable.size / 2).coerceIn(1, 10)
+            val avoid = recent.take(gap).toSet()
+            fun outsideGap(item: co.sanaa.agent.api.SokoListing) =
+                item.id.lowercase() !in avoid && item.title.trim().lowercase() !in avoid
+            val eligible = usable.filter(::outsideGap).ifEmpty { usable.filter { recent.firstOrNull() !in setOf(it.id.lowercase(), it.title.trim().lowercase()) } }.ifEmpty { usable }
+            val recycled = eligible.filter { it.id in trendingListingIds }.ifEmpty { eligible }
             return recycled[randomIndex(recycled.size).coerceIn(0, recycled.lastIndex)]
         }
 
@@ -174,6 +199,99 @@ class WorkExecutor(
     }
 
     // --- WhatsApp ---
+
+    private suspend fun recoverTerminalShop(): co.sanaa.agent.core.TerminalShopIdentity =
+        co.sanaa.agent.core.ShopSessionRecovery(
+            read = { co.sanaa.agent.core.TerminalShopIdentity.readFresh(context) },
+            reopen = { actions.openAppByName("soko terminal") &&
+                actions.waitForForegroundPackage("com.soko24.soko_seller_terminal") != null },
+            settle = { kotlinx.coroutines.delay(1000) },
+        ).ensure()
+
+    private suspend fun executeMeetingReminder(item: WorkItem): WorkResult {
+        val runtime = co.sanaa.agent.core.AgentRuntime.get(context)
+        val store = co.sanaa.agent.core.CommitmentStore(context)
+        try {
+            val id = item.payload.optString("commitment_id")
+            val revision = item.payload.optInt("revision", -1)
+            val dueAt = item.payload.optLong("due_at")
+            val target = item.payload.optString("target")
+            val commitment = store.byId(id)
+            fun held(reason: String) = WorkResult(item, WorkStatus.ESCALATED,
+                failure = FailureInfo(FailureClass.POLICY_BLOCKED, reason, false))
+            if (!runtime.config.whatsAppAutomationEnabled || !runtime.config.whatsAppFollowUpsEnabled)
+                return held("Customer reminders are disabled")
+            if (commitment == null || commitment.revision != revision ||
+                commitment.confirmationStatus != co.sanaa.agent.core.CommitmentStore.Confirmation.AGREED ||
+                commitment.reminderRecipients != "customer" ||
+                commitment.participants.optJSONObject(0)?.optString("target") != target ||
+                commitment.agreedAt - commitment.reminderLeadMinutes * 60_000L != dueAt)
+                return held("Meeting details changed or were cancelled")
+            val now = System.currentTimeMillis()
+            if (target.isBlank() || now < dueAt || now >= commitment.agreedAt || now > dueAt + 5 * 60_000L)
+                return held("Reminder window passed or target is missing; no late message sent")
+            val zone = runCatching { ZoneId.of(commitment.timezone) }.getOrNull()
+                ?: return held("Meeting timezone is not confirmed")
+            val shop = co.sanaa.agent.core.TerminalShopIdentity.readFresh(context)
+            if (!commitment.conversationKey.startsWith("${shop.scope}:"))
+                return held("Meeting belongs to a different verified shop")
+            // A later conversation may have resolved, moved or cancelled the meeting.
+            // Hold for review unless the commitment was explicitly reconfirmed afterward.
+            if (runtime.chatStore.chatEvents(commitment.conversationKey, 20).any {
+                    (it["original_at"] as? Long ?: 0L) > commitment.updatedAt
+                }) return held("Conversation changed since meeting confirmation; review before reminding")
+            val time = DateTimeFormatter.ofPattern("HH:mm z").withZone(zone)
+                .format(Instant.ofEpochMilli(commitment.agreedAt))
+            val message = "A quick reminder of our meeting at $time about ${commitment.subject.take(100)}. See you then."
+            commercialFollowUpBlocker(runtime, target, message)?.let { return held(it) }
+            if (!store.claimReminder(id, revision, 1, dueAt))
+                return held("Reminder already claimed or no longer eligible")
+            val outcome = sideEffects.execute(
+                capabilityId = CapabilityIds.FOLLOW_UP_WHATSAPP,
+                idempotencyKey = item.dedupeKey,
+                target = target, content = message,
+                preflight = {
+                    val fresh = store.byId(id)
+                    when {
+                        !runtime.config.whatsAppAutomationEnabled || !runtime.config.whatsAppFollowUpsEnabled -> "Customer reminders are disabled"
+                        fresh == null || fresh.revision != revision ||
+                            fresh.confirmationStatus != co.sanaa.agent.core.CommitmentStore.Confirmation.AGREED -> "Meeting was changed or cancelled"
+                        System.currentTimeMillis() >= fresh.agreedAt -> "Meeting time passed"
+                        runtime.chatStore.chatEvents(fresh.conversationKey, 20).any {
+                            (it["original_at"] as? Long ?: 0L) > fresh.updatedAt
+                        } -> "Conversation changed after confirmation"
+                        else -> commercialFollowUpBlocker(runtime, target, message)
+                    }
+                },
+                act = { actions.transacted { sendToWhatsAppContact(target, message) } },
+                verify = { co.sanaa.agent.actions.TargetBoundVerifiers(actions).evaluateCurrentChat(target, message) },
+            )
+            return when (outcome) {
+                is SideEffectOutcome.Verified -> {
+                    store.settleReminder(id, revision, 1, "SENT", "Verified in exact WhatsApp chat")
+                    runtime.chatStore.storeMessage(commitment.conversationKey, "Amara", "sent", message)
+                    WorkResult(item, WorkStatus.DONE, outcomeFacts = listOf("Verified one meeting reminder"))
+                }
+                is SideEffectOutcome.DuplicateBlocked -> {
+                    if (outcome.existingState == co.sanaa.agent.core.SideEffectState.VERIFIED) {
+                        store.settleReminder(id, revision, 1, "SENT", "Existing verified reminder retained")
+                        WorkResult(item, WorkStatus.DONE, outcomeFacts = listOf("Existing verified reminder retained"))
+                    } else {
+                        store.settleReminder(id, revision, 1, "UNCERTAIN", "Existing dispatch is ${outcome.existingState}")
+                        held("Existing reminder dispatch is ${outcome.existingState}; no replay")
+                    }
+                }
+                is SideEffectOutcome.Uncertain -> {
+                    store.settleReminder(id, revision, 1, "UNCERTAIN", outcome.reason)
+                    held("Reminder delivery uncertain; no automatic replay")
+                }
+                else -> {
+                    store.settleReminder(id, revision, 1, "HELD", outcome.toString())
+                    held("Reminder stopped before verified delivery: $outcome")
+                }
+            }
+        } finally { store.close() }
+    }
 
     private suspend fun executeWhatsAppFollowUp(item: WorkItem): WorkResult {
         val chatKey = item.payload.optString("target", "")
@@ -237,10 +355,10 @@ class WorkExecutor(
                 WorkResult(item, WorkStatus.DONE, screenSecondsUsed = 40, outcomeFacts = listOf("Verified one consented follow-up"))
             }
             is SideEffectOutcome.DuplicateBlocked -> {
-                item.payload.optString("commercial_action_id").takeIf(String::isNotBlank)?.let {
+                if (verifiedEffect(outcome)) item.payload.optString("commercial_action_id").takeIf(String::isNotBlank)?.let {
                     runtime.revenueStore.updateCommercialActionState(it, "EXECUTED_VERIFIED", "duplicate prevented; original delivery already verified", System.currentTimeMillis())
                 }
-                WorkResult(item, WorkStatus.DONE, screenSecondsUsed = 10)
+                duplicateWhatsAppResult(item, outcome)
             }
             is SideEffectOutcome.Rejected -> WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.POLICY_BLOCKED, outcome.reason))
             is SideEffectOutcome.Failed -> WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.TRANSIENT_NETWORK, outcome.reason))
@@ -304,12 +422,58 @@ class WorkExecutor(
         if (!actions.openWhatsAppOrigin(item.payload.optString("conversation_identity"),label,message) ||
             !actions.verifyWhatsAppPhone(manager) || !actions.isVerifiedWhatsAppOrigin(manager,message))
             return blocked("Manager command sender phone and original message could not be verified; no command executed")
+        runtime.managerConsultations.reference(message)?.let { ref ->
+            val row = runtime.managerConsultations.get(ref)
+                ?: return blocked("Unknown consultation reference; no customer reply sent")
+            val answer = message.trim().takeIf { it.startsWith(ref, ignoreCase = true) }
+                ?.substring(ref.length)?.trimStart(' ', ':', '-', '\n').orEmpty()
+            if (answer.isBlank()) return blocked("Put the consultation reference first, followed by the customer-facing answer")
+            val shop = recoverTerminalShop()
+            if (shop.scope != row.optString("scope")) return blocked("Consultation belongs to another shop; no reply sent")
+            val contact = runtime.contacts.byId(row.optString("contactId"))
+                ?: return blocked("Consultation customer identity is unavailable")
+            if (contact.isGroup || !contact.canMonitor || !contact.canReply || contact.normalizedPhone.isNullOrBlank())
+                return blocked("Consultation customer needs a verified direct number and active reply permission")
+            if (runtime.managerConsultations.claim(ref,item.dedupeKey,answer) == null)
+                return blocked("Consultation answer already claimed; inspect its receipt before another send")
+            val outcome = runtime.humanConversation.sendMessage(contact.normalizedPhone!!, answer,
+                eventKey = "consultation:$ref", originIdentity = contact.id, shopScope = shop.scope, workKey = item.dedupeKey)
+            val verified = outcome is SideEffectOutcome.Verified ||
+                (outcome is SideEffectOutcome.DuplicateBlocked && outcome.existingState == co.sanaa.agent.core.SideEffectState.VERIFIED)
+            runtime.managerConsultations.finish(ref, if (verified) "ANSWERED" else "NEEDS_REVIEW")
+            if (verified) runtime.chatStore.storeMessage("${shop.scope}:${contact.id}", "Amara", "sent", answer)
+            runtime.enqueueManagerReport("consultation-result:${item.dedupeKey}",
+                "$ref: ${if(verified) "Customer answer delivery verified" else "Customer answer needs review; no automatic replay"}")
+            return if (verified) WorkResult(item,WorkStatus.DONE,outcomeFacts=listOf("Manager consultation answer delivered to bound customer"))
+                else blocked("Consultation delivery remains unverified; inspect receipt")
+        }
+        if (message.contains("ASK-", ignoreCase = true)) return blocked("Consultation reference is incomplete; no command or customer reply executed")
+        val consultationScope = runCatching { co.sanaa.agent.core.TerminalShopIdentity.readFresh(context).scope }.getOrDefault("")
+        val waiting = runtime.managerConsultations.waitingReferences(consultationScope)
+        if (waiting.isNotEmpty() && !Regex("(?i)^(please\\s+)?(post|share|send|check|open|show|create|schedule|stop|pause|resume|start|find|search|update|review|tell|reply|call|approve|reject|adjust|set|change)\\b").containsMatchIn(message.trim())) {
+            runtime.enqueueManagerReport("consultation-clarify:${item.dedupeKey}",
+                "I have customer consultations waiting. Please put the matching reference before your customer-facing answer: ${waiting.take(8).joinToString()}. For a separate task, state the action you want me to take.")
+            return blocked("Manager response needs a consultation reference or an explicit command; no customer chosen by guess")
+        }
         // Persist a claim before running: a process death or uncertain result must never replay an owner command.
         val receipts = context.getSharedPreferences("manager_command_receipts",android.content.Context.MODE_PRIVATE)
         val key = co.sanaa.agent.core.ContentHashing.hash("$manager:${item.dedupeKey}")
         if (receipts.contains(key)) return blocked("Manager command already claimed; inspect its receipt before repeating")
         check(receipts.edit().putString(key,"claimed").commit())
-        val result = co.sanaa.agent.core.CommandExecutor(context).executeWithinDeviceLease(message)
+        val thread = co.sanaa.agent.core.ManagerCommandThread(context)
+        val threadScope = runCatching { co.sanaa.agent.core.TerminalShopIdentity.readFresh(context).scope }
+            .getOrNull()?.takeIf { it.isNotBlank() }
+        val marketScope = context.getSharedPreferences("market_review_scope",Context.MODE_PRIVATE)
+        val marketContext = if (threadScope != null && marketScope.getString("scope",null) == threadScope &&
+            System.currentTimeMillis() - marketScope.getLong("at",0L) in 0..86_400_000L)
+            "Recent market evidence (context only, not authorization):\n" +
+                co.sanaa.agent.core.growth.MarketGrowthReview.managerMessage(runtime.growthStore.report()) else ""
+        val history = listOf(threadScope?.let { thread.context(manager, it) }.orEmpty(),marketContext)
+            .filter(String::isNotBlank).joinToString("\n")
+        val result = co.sanaa.agent.core.CommandExecutor(context).executeWithinDeviceLease(message, history)
+        if (threadScope != null && runCatching {
+                co.sanaa.agent.core.TerminalShopIdentity.readFresh(context).scope == threadScope
+            }.getOrDefault(false)) thread.record(manager, threadScope, message, result)
         check(receipts.edit().putString(key,result.status).commit())
         runtime.enqueueManagerReport("command:$key", "Amara task result: ${result.status}\n${result.message}")
         return if(result.success) WorkResult(item,WorkStatus.DONE,outcomeFacts=listOf("Verified manager command processed; result notification queued"))
@@ -335,17 +499,18 @@ class WorkExecutor(
             if (inbound.isGroup && !runtime.config.whatsAppGroupsEnabled) {
                 return WorkResult(item, WorkStatus.SKIPPED, failure = FailureInfo(FailureClass.POLICY_BLOCKED, "WhatsApp group autopilot is off", false))
             }
-            if (item.payload.optBoolean("manager_command_candidate")) return executeManagerCommand(item, runtime)
             if (inbound.isMissedCall) {
                 runtime.reporter.report("Missed WhatsApp call", inbound.sender, co.sanaa.agent.notifications.NotificationReporter.Priority.ACTION_NEEDED)
                 return WorkResult(item, WorkStatus.DONE, outcomeFacts = listOf("Recorded a missed WhatsApp call and notified the owner"))
             }
+            if (item.payload.optBoolean("manager_command_candidate")) return executeManagerCommand(item, runtime)
             val started = System.currentTimeMillis()
             val result = (dependencies?.humanConversation ?: runtime.humanConversation)
                 .processMessage(
                     inbound.target, inbound.sender, inbound.message, inbound.isGroup,
                     inboundWorkKey = item.dedupeKey,
                     conversationIdentity = item.payload.optString("conversation_identity"),
+                    originalMessageAt = item.payload.optLong("inbound_message_at"),
                     trustedWhatsAppNotification = item.payload.optBoolean("trusted_whatsapp_notification", false) ||
                         (item.payload.optBoolean("inbound", false) && item.dedupeKey.startsWith("wa-inbound:")),
                 )
@@ -361,6 +526,23 @@ class WorkExecutor(
                 is co.sanaa.agent.modules.ReplyResult.Escalate -> "Escalated WhatsApp conversation: ${result.reason}"
                 is co.sanaa.agent.modules.ReplyResult.Failed -> result.error
             }
+            // Work DONE can mean a reply, a duplicate/no-op, or a manager
+            // handoff. Keep the classification next to the work key so fleet
+            // reporting never treats a completed task as a delivered reply.
+            val resultType = when (result) {
+                is co.sanaa.agent.modules.ReplyResult.SendBurst -> "reply_sent"
+                is co.sanaa.agent.modules.ReplyResult.HandedOff -> "manager_handoff"
+                is co.sanaa.agent.modules.ReplyResult.AlreadyAnswered -> "already_answered"
+                is co.sanaa.agent.modules.ReplyResult.NoReplyNeeded -> "no_reply_needed"
+                is co.sanaa.agent.modules.ReplyResult.Escalate -> "escalated"
+                is co.sanaa.agent.modules.ReplyResult.Failed -> "failed"
+            }
+            runtime.evaluation.record("inbound_reply_result", item.dedupeKey,
+                org.json.JSONObject().put("result_type", resultType).put("reply_parts", when (result) {
+                    is co.sanaa.agent.modules.ReplyResult.SendBurst -> result.messages.size
+                    is co.sanaa.agent.modules.ReplyResult.HandedOff -> result.messages.size
+                    else -> 0
+                }))
             return WorkResult(
                 item,
                 if (success) WorkStatus.DONE else if (result is co.sanaa.agent.modules.ReplyResult.Escalate) WorkStatus.ESCALATED else WorkStatus.FAILED,
@@ -377,12 +559,16 @@ class WorkExecutor(
         }
         val runtime=co.sanaa.agent.core.AgentRuntime.get(context)
         val managerReport=item.payload.optBoolean("manager_report")
+        val reportScope = item.payload.optString("shop_scope")
+        if (managerReport && reportScope.isNotBlank() &&
+            co.sanaa.agent.core.TerminalShopIdentity.readFresh(context).scope != reportScope)
+            return WorkResult(item, WorkStatus.SKIPPED, failure=FailureInfo(FailureClass.PRECONDITION_GONE,"Manager report belongs to a different shop",false))
         if(managerReport && target != runtime.config.managerWhatsApp)
             return WorkResult(item,WorkStatus.SKIPPED,failure=FailureInfo(FailureClass.POLICY_BLOCKED,"Manager destination changed",false))
         if(!runtime.config.whatsAppAutomationEnabled || !runtime.config.whatsAppInboundEnabled)
             return WorkResult(item,WorkStatus.SKIPPED,failure=FailureInfo(FailureClass.POLICY_BLOCKED,"WhatsApp replies are disabled",false))
         if(!actions.openWhatsAppTarget(target))
-            return WorkResult(item,WorkStatus.ESCALATED,failure=FailureInfo(FailureClass.UI_MISMATCH,"Exact queued reply destination unavailable: ${actions.lastWhatsAppNavigationFailure}",false))
+            return WorkResult(item,WorkStatus.FAILED,failure=FailureInfo(FailureClass.UI_MISMATCH,"Exact queued reply destination unavailable: ${actions.lastWhatsAppNavigationFailure}; no send attempted",true))
 
         val outcome = sideEffects.execute(
             capabilityId = if(managerReport) CapabilityIds.NOTIFY_OWNER_WHATSAPP else CapabilityIds.REPLY_WHATSAPP,
@@ -403,7 +589,7 @@ class WorkExecutor(
 
         return when (outcome) {
             is SideEffectOutcome.Verified -> WorkResult(item, WorkStatus.DONE, screenSecondsUsed = 45)
-            is SideEffectOutcome.DuplicateBlocked -> WorkResult(item, WorkStatus.DONE, screenSecondsUsed = 10)
+            is SideEffectOutcome.DuplicateBlocked -> duplicateWhatsAppResult(item, outcome)
             is SideEffectOutcome.Rejected -> WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.POLICY_BLOCKED, outcome.reason))
             is SideEffectOutcome.Failed -> WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.TRANSIENT_NETWORK, outcome.reason))
             is SideEffectOutcome.Uncertain -> WorkResult(item, WorkStatus.ESCALATED, failure = FailureInfo(FailureClass.UNKNOWN, outcome.reason,false))
@@ -441,7 +627,7 @@ class WorkExecutor(
 
         return when (outcome) {
             is SideEffectOutcome.Verified -> WorkResult(item, WorkStatus.DONE, screenSecondsUsed = 60)
-            is SideEffectOutcome.DuplicateBlocked -> WorkResult(item, WorkStatus.DONE, screenSecondsUsed = 10)
+            is SideEffectOutcome.DuplicateBlocked -> duplicateWhatsAppResult(item, outcome)
             is SideEffectOutcome.Rejected -> WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.POLICY_BLOCKED, outcome.reason))
             is SideEffectOutcome.Failed -> WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.TRANSIENT_NETWORK, outcome.reason))
             is SideEffectOutcome.Uncertain -> WorkResult(item, WorkStatus.ESCALATED, failure = FailureInfo(FailureClass.UNKNOWN, outcome.reason,false))
@@ -451,15 +637,23 @@ class WorkExecutor(
     private suspend fun executeWhatsAppGroup(item: WorkItem): WorkResult {
         val runtime = co.sanaa.agent.core.AgentRuntime.get(context)
         val target = item.payload.getString("group_target")
+        val groupId = item.payload.optString("group_id")
+        val groupEntry = runtime.contacts.byId(groupId)
+            ?.takeIf { it.isGroup && it.displayName == target }
+            ?: return WorkResult(item, WorkStatus.SKIPPED, failure = FailureInfo(
+                FailureClass.POLICY_BLOCKED, "Group destination identity changed or is missing; no send attempted", false))
         fun allowed() = runtime.config.whatsAppAutomationEnabled && runtime.config.whatsAppGroupsEnabled &&
-            runtime.contacts.listAll().filter { it.isGroup && it.displayName==target }.singleOrNull()?.let { runtime.groupSettings.allows(it,"promote") } == true &&
+            runtime.contacts.listAll().filter { it.isGroup }.let { groups ->
+                co.sanaa.agent.core.work.sources.GroupDestinationBinding.matches(groupId, target,
+                    groups.map { co.sanaa.agent.core.work.sources.GroupDestination(it.id, it.displayName) }) &&
+                    groups.singleOrNull { it.id == groupId }?.let { runtime.groupSettings.allows(it, "promote") } == true
+            } &&
             (co.sanaa.agent.core.ContactDirectoryProvider.instance?.authorizeOutgoingSend(
                 presentedName = target, presentedNumber = null, visibleThreadLabel = target, isGroup = true,
             ) is co.sanaa.agent.core.DispatchDecision.Allowed)
         if (!allowed()) return WorkResult(item, WorkStatus.SKIPPED,
             failure = FailureInfo(FailureClass.POLICY_BLOCKED, "Group send permission is unavailable", false))
-        val groupEntry = runtime.contacts.listAll().single { it.isGroup && it.displayName==target }
-        if(runtime.groupSettings.due(groupEntry)>System.currentTimeMillis()) return WorkResult(item,WorkStatus.SKIPPED,
+        if(!item.payload.optBoolean("owner_command") && runtime.groupSettings.due(groupEntry)>System.currentTimeMillis()) return WorkResult(item,WorkStatus.SKIPPED,
             failure=FailureInfo(FailureClass.POLICY_BLOCKED,"Group schedule is paused or not due",false))
         if(runtime.groupSettings.row(groupEntry)["paused"]==true) {
             runtime.groupSettings.recoveryChecked(groupEntry)
@@ -472,28 +666,56 @@ class WorkExecutor(
             }
             val preDispatch=co.sanaa.agent.modules.GroupRecoveryPolicy.canRetry(
                 recoveryRow["lastWorkKey"].toString(), recoveryRow["lastDispatchState"].toString(), unresolvedDispatch)
-            if(preDispatch && runCatching { runtime.soko.promotableOfferings().isNotEmpty() }.getOrDefault(false) && actions.openWhatsAppTarget(target)) {
+            val catalogueReady = if (preDispatch) try {
+                recoverTerminalShop()
+                runtime.soko.promotableOfferings().isNotEmpty()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            } else false
+            val targetVerified = preDispatch && catalogueReady && actions.openWhatsAppGroup(groupId, target)
+            if(targetVerified) {
                 runtime.groupSettings.recordCheck(groupEntry,true,"Fresh catalogue and conversation checked; prior attempt proved no send. Future promotion resumed.")
                 runtime.groupSettings.update(runtime.contacts,groupEntry.id,"resume",true)
                 return WorkResult(item,WorkStatus.SKIPPED,outcomeFacts=listOf("Exact group found; resumed future scheduled promotion"))
             }
             if(reason.contains("Uncertain",true)) {
-                val previous=runtime.workQueue.readableDatabase.rawQuery("SELECT payload FROM work_items WHERE kind='WA_BROADCAST' AND dedupe_key!=? ORDER BY id DESC",arrayOf(item.dedupeKey)).use { rows ->
+                val previous=runtime.workQueue.readableDatabase.rawQuery("SELECT payload FROM work_items WHERE kind='WA_BROADCAST' AND dedupe_key=? ORDER BY id DESC",arrayOf(recoveryRow["lastWorkKey"].toString())).use { rows ->
                     var found:org.json.JSONObject?=null
                     while(rows.moveToNext()) {
                         val p=org.json.JSONObject(rows.getString(0))
-                        if(p.optString("group_target")==target && p.optString("message").isNotBlank()) { found=p;break }
+                        if(p.optString("group_id")==groupId && p.optString("group_target")==target &&
+                            p.optString("message").isNotBlank()) { found=p;break }
                     }
                     found
                 }
                 if(previous!=null && actions.verifyCaptionedPhoto(target,previous.optString("message")).verified) {
+                    runtime.groupSettings.recordCheck(groupEntry,true,"Previous photo delivery was read-verified; future schedule resumed without resending")
                     runtime.groupSettings.update(runtime.contacts,groupEntry.id,"resume",true)
                     return WorkResult(item,WorkStatus.SKIPPED,outcomeFacts=listOf("Previous photo delivery read-verified; schedule resumed without resending it"))
                 }
             }
-            return WorkResult(item,WorkStatus.SKIPPED,outcomeFacts=listOf("Group recovery check unresolved; no send attempted; next check in 30 minutes"))
+            val checkDetail = when {
+                unresolvedDispatch -> "Prior group effect may have been dispatched; review or reconcile its receipt before retry"
+                !preDispatch -> "Prior dispatch state is not proven pre-send; review its effect receipt before retry"
+                !catalogueReady -> "Fresh signed shop and promotable catalogue could not both be verified"
+                else -> "Exact group conversation could not be verified: ${actions.lastWhatsAppNavigationFailure.take(180)}"
+            }
+            runtime.groupSettings.recordCheck(groupEntry,false,checkDetail)
+            return WorkResult(item, WorkStatus.SKIPPED, failure = FailureInfo(
+                FailureClass.POLICY_BLOCKED,
+                "$checkDetail; no send attempted; next check in 30 minutes",
+                false,
+            ))
         }
-        val shop = co.sanaa.agent.core.TerminalShopIdentity.readFresh(context)
+        val shop = try { recoverTerminalShop() }
+        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) {
+            return WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.APP_STATE,
+                "Terminal shop verification unavailable after bounded recovery; no group send attempted", false))
+        }
+        val rotationAudience = co.sanaa.agent.core.growth.GrowthStore.groupAudience(shop.scope, groupId)
         if (item.payload.optString("message").isNotBlank() && item.payload.optString("shop_scope") != shop.scope) {
             if (runtime.memory.allSideEffectTransactions().any { it.idempotencyKey == item.dedupeKey })
                 return WorkResult(item, WorkStatus.ESCALATED, failure = FailureInfo(FailureClass.POLICY_BLOCKED,
@@ -507,23 +729,31 @@ class WorkExecutor(
         var imageUrl = item.payload.optString("image_url")
         var groupAd = item.payload.optJSONObject("ad")?.let(co.sanaa.agent.modules.AmaraAdSpec::fromJson)
         if (message.isBlank()) {
-            val listing = co.sanaa.agent.core.growth.GrowthStore.select(try { runtime.soko.promotableOfferings().filter { runtime.groupSettings.acceptsOffer(groupEntry, it) } }
+            val offerings = try { runtime.soko.promotableOfferings().filter { runtime.groupSettings.acceptsOffer(groupEntry, it) } }
                 catch (error: java.io.IOException) {
                     return WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(
                         FailureClass.TRANSIENT_NETWORK, "Pre-send catalogue network failure; no send attempted", true))
-                }, runtime.growthStore.history(target),
-                inquiryCounts = runtime.revenueStore.inquiries(System.currentTimeMillis() - 30L * 86_400_000, System.currentTimeMillis())
-                    .groupingBy { it.productRef }.eachCount())
-                ?: return WorkResult(item, WorkStatus.FAILED,
-                    failure = FailureInfo(FailureClass.PRECONDITION_GONE, "No verified offering matches this group’s offer topics", false))
+                }
+            val prepared = co.sanaa.agent.modules.AdOfferingPreparation.choose(offerings,
+                select = { candidates -> co.sanaa.agent.core.growth.GrowthStore.select(candidates,
+                    runtime.growthStore.history(rotationAudience),
+                    inquiryCounts = runtime.revenueStore.inquiries(System.currentTimeMillis() - 30L * 86_400_000, System.currentTimeMillis())
+                        .groupingBy { it.productRef }.eachCount(),
+                    trendingListingIds = runtime.marketAnalyzer.groundedTrendListingIds(candidates)) },
+                headline = { candidate -> co.sanaa.agent.modules.AdHeadlinePlanner.choose(candidate, runtime.groq, item.dedupeKey) },
+                rejected = { candidate -> recordHeadlineRejection(runtime, item, rotationAudience, candidate) },
+            ) ?: return WorkResult(item, WorkStatus.ESCALATED,
+                failure = FailureInfo(FailureClass.PRECONDITION_GONE, "No verified offering with an acceptable headline matches this group's topics; no send attempted", false))
+            val listing = prepared.listing
             val content = co.sanaa.agent.modules.GroupPromotionContent.from(listing, variant = item.dedupeKey.hashCode())!!
             message = content.caption
             runtime.evaluation.record("group_caption_prepared", item.dedupeKey, org.json.JSONObject()
                 .put("characters", message.length).put("style", "brief")
                 .put("target_hash", co.sanaa.agent.core.ContentHashing.hash(target)))
-            groupAd = co.sanaa.agent.modules.AmaraAdSpec.from(listing,"",shop.name).copy(format="photo")
+            groupAd = co.sanaa.agent.modules.AmaraAdSpec.from(listing,"",shop.name,
+                headline=prepared.headline).copy(format="photo")
             imageUrl = content.imageUrl
-            runtime.growthStore.bind(item.dedupeKey, target, listing)
+            runtime.growthStore.bind(item.dedupeKey, rotationAudience, listing)
             val bound = org.json.JSONObject(item.payload.toString()).put("message", message).put("listing_id", listing.id)
                 .put("image_url", content.imageUrl).put("ad",groupAd!!.toJson()).put("shop_scope",shop.scope)
             if (!runtime.workQueue.bindGroupPayload(item.dedupeKey, bound)) return WorkResult(item, WorkStatus.FAILED,
@@ -554,9 +784,10 @@ class WorkExecutor(
             } },
             verify = { actions.verifyCaptionedPhoto(target, message) },
         )
-        val success = outcome is SideEffectOutcome.Verified || outcome is SideEffectOutcome.DuplicateBlocked
+        val success = verifiedEffect(outcome)
         runtime.growthStore.outcome(item.dedupeKey, when (outcome) {
-            is SideEffectOutcome.Verified, is SideEffectOutcome.DuplicateBlocked -> "VERIFIED"
+            is SideEffectOutcome.Verified -> "VERIFIED"
+            is SideEffectOutcome.DuplicateBlocked -> if (verifiedEffect(outcome)) "VERIFIED" else "UNCERTAIN"
             is SideEffectOutcome.Uncertain -> "UNCERTAIN"
             else -> "FAILED"
         })
@@ -660,19 +891,28 @@ class WorkExecutor(
                 .put("interaction_outcome", result.optString("interaction_outcome"))
                 .put("blocked", result.optString("blocked"))
                 .put("observed", result.optInt("observed_this_cycle")))
-            val failed = result.optString("interaction_outcome") in setOf("FAILED", "UNCERTAIN", "MODEL_DEFERRED")
+            val outcome = result.optString("interaction_outcome")
+            val failed = outcome !in setOf("VERIFIED", "NO_RELEVANT_POST", "YIELDED_TO_PRIORITY_WORK")
             val blocked=result.optString("blocked")
-            val disabled=blocked=="Public interactions are disabled"
-            return WorkResult(item, if(disabled) WorkStatus.SKIPPED else if (blocked.isNotBlank()) WorkStatus.FAILED else if (failed) WorkStatus.PARTIAL else WorkStatus.DONE,
+            return WorkResult(item, co.sanaa.agent.modules.TikTokCommunityObservation.status(outcome,blocked),
                 screenSecondsUsed = 90, outcomeFacts = listOf(result.toString()),
                 discoveredWork = if (!failed && !result.has("blocked")) listOfNotNull(TikTokCommunityWork.next(item)) else emptyList(),
-                failure = if(blocked.isNotBlank() && !disabled) FailureInfo(FailureClass.UI_MISMATCH,blocked,true)
-                    else if (failed) FailureInfo(FailureClass.UNKNOWN, "TikTok interaction: ${result.optString("interaction_outcome")}", false) else null)
+                failure = co.sanaa.agent.modules.TikTokCommunityObservation.failure(outcome, blocked))
         }
         val comments = (dependencies?.tiktokSkill ?: co.sanaa.agent.core.AgentRuntime.get(context).tiktok)
             .readComments(item.payload.optString("post_hint", ""))
         return if (comments.isEmpty()) WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.UI_MISMATCH, "No TikTok comments could be verified"))
         else WorkResult(item, WorkStatus.DONE, screenSecondsUsed = 30, outcomeFacts = listOf("Read ${comments.size} TikTok comments; no autonomous replies were sent"))
+    }
+
+    private fun recordHeadlineRejection(runtime: co.sanaa.agent.core.AgentRuntime, item: WorkItem,
+        audience: String, listing: co.sanaa.agent.api.SokoListing) {
+        val key = "headline:${item.dedupeKey}:${co.sanaa.agent.core.ContentHashing.hash(listing.id + ":" + listing.title)}"
+        runtime.growthStore.bind(key, audience, listing)
+        runtime.growthStore.outcome(key, "HEADLINE_REJECTED")
+        runtime.evaluation.record("ad_headline_rejected", item.dedupeKey, org.json.JSONObject()
+            .put("listing_hash", co.sanaa.agent.core.ContentHashing.hash(listing.id))
+            .put("dispatch_started", false))
     }
 
     private suspend fun executeTikTokPost(item: WorkItem): WorkResult {
@@ -698,7 +938,12 @@ class WorkExecutor(
         }
 
         // Shared screen-session recovery established a fresh signed Terminal identity.
+        val preparationJournal = co.sanaa.agent.core.EvaluationJournal(context)
+        fun stage(name: String) = preparationJournal.record("tiktok_preparation_stage", item.dedupeKey,
+            org.json.JSONObject().put("stage", name).put("elapsed_ms", System.currentTimeMillis() - startTime))
+        stage("catalogue_started")
         val listings = runtime.soko.promotableOfferings()
+        stage("catalogue_ready")
         if (listings.isEmpty()) {
             return WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.PRECONDITION_GONE, "No listings available from API or Soko Terminal"))
         }
@@ -707,27 +952,34 @@ class WorkExecutor(
         // runs retain the normal rotation. Never silently substitute another product
         // when an explicit listing was requested.
         val requestedListingId = item.payload.optString("listing_id").trim()
-        val listing = if (requestedListingId.isNotBlank()) {
-            listings.firstOrNull { it.id == requestedListingId }
-                ?: return WorkResult(
-                    item,
-                    WorkStatus.FAILED,
-                    failure = FailureInfo(FailureClass.PRECONDITION_GONE, "The selected Soko listing is no longer active"),
-                )
-        } else {
-            val recentTargets = runtime.memory.recentTikTokProductTargets(
-                System.currentTimeMillis() - 30L * 86_400_000L,
-            )
-            selectTikTokListing(listings, recentTargets)
-                ?: return WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.PRECONDITION_GONE, "No Soko listing with usable media is available"))
-        }
-
+        val audience = "tiktok:${listings.first().raw.optString("shop_scope") }"
+        val bound = item.payload.optString("product_fingerprint").isNotBlank()
+        if (bound && requestedListingId.isBlank()) return WorkResult(item, WorkStatus.ESCALATED,
+            failure = FailureInfo(FailureClass.PRECONDITION_GONE, "Bound ad has no listing identity; review required", false))
+        val prepared = co.sanaa.agent.modules.AdOfferingPreparation.choose(
+            listings, requestedListingId,
+            select = { candidates -> co.sanaa.agent.core.growth.GrowthStore.select(candidates,
+                runtime.growthStore.history(audience),
+                trendingListingIds = runtime.marketAnalyzer.groundedTrendListingIds(candidates)) },
+            headline = { candidate ->
+                if (bound) item.payload.optJSONObject("ad")?.optString("headline")
+                    ?.takeIf { co.sanaa.agent.modules.AdHeadline.validated(candidate.title, it) != null }
+                    ?: throw co.sanaa.agent.modules.AdHeadlineUnavailable()
+                else co.sanaa.agent.modules.AdHeadlinePlanner.choose(candidate, runtime.groq, item.dedupeKey)
+            },
+            rejected = { candidate -> recordHeadlineRejection(runtime, item, audience, candidate) },
+        ) ?: return WorkResult(item, WorkStatus.ESCALATED, failure = FailureInfo(
+            FailureClass.PRECONDITION_GONE,
+            "No acceptable headline among the checked offerings; nothing dispatched. Review the selected title or model service.", false))
+        val listing = prepared.listing
+        val headline = prepared.headline
         val shopScope = listing.raw.optString("shop_scope")
+        stage("offering_selected")
         if (shopScope.isBlank() || (item.payload.optString("shop_scope") != shopScope &&
-            (item.payload.optString("listing_id").isNotBlank() || item.payload.optString("product_fingerprint").isNotBlank()))) {
+            (requestedListingId.isNotBlank() || bound))) {
             return WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(FailureClass.POLICY_BLOCKED, "Old or different-shop content cannot be reused. Prepare new work for the verified Terminal shop.", false))
         }
-        val productContent = co.sanaa.agent.modules.TikTokProductContent.from(listing, config.publicAdWhatsApp, listing.raw.optString("shop_name"))
+        val productContent = co.sanaa.agent.modules.TikTokProductContent.from(listing, config.publicAdWhatsApp, listing.raw.optString("shop_name"), headline)
             ?: return WorkResult(item, WorkStatus.FAILED, failure = FailureInfo(
                 FailureClass.PRECONDITION_GONE, "Selected product needs a valid title, photo URL and shopping slug; nothing published", false,
             ))
@@ -738,6 +990,7 @@ class WorkExecutor(
             ))
         }
         val caption = productContent.caption
+        stage("creative_ready")
 
         val boundPayload = org.json.JSONObject(item.payload.toString())
             .put("shop_scope", shopScope).put("listing_id", listing.id).put("caption", caption)
@@ -749,8 +1002,17 @@ class WorkExecutor(
             ))
         }
 
+        stage("payload_bound")
+        runtime.growthStore.bind(item.dedupeKey, "tiktok:$shopScope", listing)
         // Rendering is reversible preparation, before reserving an external publication.
-        val adFile = actions.prepareBoundTikTokAd(productContent.imageUrl, item.dedupeKey, productContent.ad)
+        stage("render_started")
+        val preparationContext = kotlin.coroutines.coroutineContext
+        val adFile = actions.prepareBoundTikTokAd(productContent.imageUrl, item.dedupeKey, productContent.ad) {
+            preparationContext[kotlinx.coroutines.Job]?.let { job ->
+                if (!job.isActive) throw kotlinx.coroutines.CancellationException("Ad preparation cancelled")
+            }
+        }
+        stage("render_ready")
         val mediaDigest = co.sanaa.agent.actions.BoundTikTokMedia.sha256(adFile.readBytes())
         // Rendering can outlive the short signed identity lease. Refresh/reopen
         // before TikTok is opened, then bind to the same shop used for this media.
@@ -761,6 +1023,7 @@ class WorkExecutor(
             settle = { kotlinx.coroutines.delay(1000) },
         ).ensure()
         check(freshShop.scope == shopScope) { "Shop changed while rendering the ad; nothing published" }
+        stage("shop_revalidated")
         val publishOutcome = sideEffects.execute(
             capabilityId = CapabilityIds.POST_TIKTOK,
             inputs = mapOf("shop_scope" to shopScope, "target" to "tiktok", "message" to "$caption\nmedia-sha256:$mediaDigest"),
@@ -773,12 +1036,18 @@ class WorkExecutor(
             },
             verify = { co.sanaa.agent.actions.TargetBoundVerifiers(actions).verifyTikTokPost(caption) },
         )
-        val published = publishOutcome is SideEffectOutcome.Verified || publishOutcome is SideEffectOutcome.DuplicateBlocked
+        if (ownerStoppedBeforeDispatch(publishOutcome)) {
+            return WorkResult(item, WorkStatus.SKIPPED,
+                failure = FailureInfo(FailureClass.POLICY_BLOCKED, "Owner paused Amara before TikTok dispatch", false))
+        }
+        val published = verifiedEffect(publishOutcome)
+        runtime.growthStore.outcome(item.dedupeKey, if (published) "VERIFIED" else
+            if (publishOutcome is SideEffectOutcome.Uncertain || publishOutcome is SideEffectOutcome.DuplicateBlocked) "UNCERTAIN" else "FAILED")
 
         // Record the action
         runtime.memory.recordAction(
             "tiktok_post",
-            listing.title,
+            listing.id,
             "TikTok",
             "TikTok ${productContent.ad.template} ${productContent.ad.format} ad for ${listing.title}; media=$mediaDigest",
             if (published) "Published: $caption" else "Failed to publish",
@@ -820,7 +1089,8 @@ class WorkExecutor(
         if(attempts >= 6) return WorkResult(item,WorkStatus.SKIPPED,
             failure=FailureInfo(FailureClass.POLICY_BLOCKED,"Daily Story limit reached (6)",false))
         val listing = runtime.soko.promotableOfferings().firstOrNull { it.id == item.payload.optString("listing_id") }
-        val content = listing?.let { co.sanaa.agent.modules.TikTokProductContent.from(it,runtime.config.publicAdWhatsApp,it.raw.optString("shop_name")) }
+        val content = listing?.let { co.sanaa.agent.modules.TikTokProductContent.from(it,runtime.config.publicAdWhatsApp,it.raw.optString("shop_name"),
+            item.payload.optJSONObject("ad")?.optString("headline")?.takeIf(String::isNotBlank)) }
         if(content == null || content.fingerprint != item.payload.optString("product_fingerprint"))
             return WorkResult(item,WorkStatus.SKIPPED,failure=FailureInfo(FailureClass.PRECONDITION_GONE,"Story catalogue details changed or are unavailable",false))
         val shopScope = item.payload.optString("shop_scope")
@@ -850,7 +1120,10 @@ class WorkExecutor(
             act={ actions.transacted { postTikTokStory(content.imageUrl,content.caption,item.dedupeKey) } },
             verify={ actions.verifyTikTokStory() },
         )
-        val success = outcome is SideEffectOutcome.Verified || outcome is SideEffectOutcome.DuplicateBlocked
+        if (ownerStoppedBeforeDispatch(outcome))
+            return WorkResult(item,WorkStatus.SKIPPED,
+                failure=FailureInfo(FailureClass.POLICY_BLOCKED,"Owner paused Amara before Story dispatch",false))
+        val success = verifiedEffect(outcome)
         return WorkResult(item,if(success) WorkStatus.DONE else WorkStatus.FAILED,
             screenSecondsUsed=((System.currentTimeMillis()-start)/1000).toInt(),
             failure=if(success) null else FailureInfo(FailureClass.UNKNOWN,"Story: $outcome; preparation=${actions.lastTikTokPreparationFailure}",false))
@@ -869,7 +1142,16 @@ class WorkExecutor(
         val category = item.payload.optString("category", "general")
         val runtime = co.sanaa.agent.core.AgentRuntime.get(context)
         val scraper = runtime.jijiScraper
-        val query=item.payload.optString("query").trim()
+        val explicitQuery=item.payload.optString("query").trim()
+        val query = if (explicitQuery.isNotBlank()) explicitQuery else {
+            val offerings = runtime.soko.promotableOfferings().filter { it.title.isNotBlank() }.sortedBy { it.id }
+            if (offerings.isEmpty()) return WorkResult(item, WorkStatus.FAILED,
+                failure = FailureInfo(FailureClass.PRECONDITION_GONE, "No own products or services available for catalogue research", true))
+            val scope = co.sanaa.agent.core.TerminalShopIdentity.readFresh(context).scope
+            check(offerings.all { it.raw.optString("shop_scope") == scope }) { "Shop changed before catalogue research" }
+            val slot = System.currentTimeMillis() / (runtime.config.jijiScrapeIntervalHours.coerceIn(1,24) * 3_600_000L)
+            offerings[(slot % offerings.size).toInt()].title
+        }
         val count = if(query.isNotBlank()) scraper.scrapeSearch(query,20) else scraper.scrapeCategory(category, 20)
         return WorkResult(
             item = item,
@@ -918,7 +1200,10 @@ class WorkExecutor(
         check(offerings.all { it.raw.optString("shop_scope")==scope }) { "Shop changed during market review" }
         val report = co.sanaa.agent.core.growth.MarketGrowthReview(runtime.memory, runtime.marketAnalyzer, runtime.growthStore).review(offerings)
         context.getSharedPreferences("market_review_scope",Context.MODE_PRIVATE).edit().putString("scope",scope).putLong("at",System.currentTimeMillis()).commit()
-        return WorkResult(item, WorkStatus.DONE, outcomeFacts = listOf(report.getString("summary")))
+        val queued = runtime.enqueueManagerReport("market:$scope:${System.currentTimeMillis() / 86_400_000L}",
+            co.sanaa.agent.core.growth.MarketGrowthReview.managerMessage(report), shopScope = scope)
+        return WorkResult(item, WorkStatus.DONE, outcomeFacts = listOf(report.getString("summary"),
+            if (queued) "Manager market review queued; delivery awaits verification" else "Market review saved; manager delivery is blocked"))
     }
 
     // --- Internal ---
@@ -978,7 +1263,7 @@ class WorkExecutor(
             val entry=runtime.contacts.byId(item.payload.optString("check_group_id"))
             if(entry?.isGroup!=true || !entry.canMonitor) return WorkResult(item,WorkStatus.ESCALATED,
                 failure=FailureInfo(FailureClass.POLICY_BLOCKED,"Group permission changed; no action taken",false))
-            val found=actions.openWhatsAppTarget(entry.displayName)
+            val found=actions.openWhatsAppGroup(entry.id,entry.displayName)
             val detail=if(found) "Matching conversation opened; no message sent. Posting permission still requires its own check." else "Group identity unavailable: ${actions.lastWhatsAppNavigationFailure}"
             runtime.groupSettings.recordCheck(entry,found,detail)
             return if(found) WorkResult(item,WorkStatus.DONE,outcomeFacts=listOf(detail))

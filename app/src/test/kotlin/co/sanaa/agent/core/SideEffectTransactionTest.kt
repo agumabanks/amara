@@ -19,6 +19,40 @@ import org.junit.Test
  * separately by AmaraMemoryTest (Robolectric).
  */
 class SideEffectTransactionTest {
+    @Test fun receiptCarriesWorkKeyWithoutChangingSendIdempotency() = runBlocking {
+        val ledger = FakeLedger()
+        val receipts = mutableListOf<Pair<String, String>>()
+        val runner = SideEffectRunner(ledger).apply {
+            receiptObserver = { state, _, _, _, _, workKey -> receipts += state to workKey }
+        }
+        var sends = 0
+        suspend fun send() = runner.execute(CapabilityIds.REPLY_WHATSAPP, "reply-effect-key", "Customer", "Hello",
+            inputs = mapOf("target" to "Customer", "content" to "Hello"), workKey = "inbound-work-key",
+            act = { sends++; true }, verify = { evidence(true) })
+        assertTrue(send() is SideEffectOutcome.Verified)
+        assertTrue(send() is SideEffectOutcome.DuplicateBlocked)
+        assertEquals(1, sends)
+        assertEquals("reply-effect-key", ledger.store.keys.single())
+        assertTrue(receipts.isNotEmpty())
+        assertTrue(receipts.all { it.second == "inbound-work-key" })
+    }
+
+    @Test fun scopedCommunityCommentDispatchesOnceAndRejectsAnotherShop() = runBlocking {
+        val ledger=FakeLedger()
+        val runner=SideEffectRunner(ledger).apply {
+            businessScopeGuard={ capability, inputs -> BusinessChannelPolicy.shopBlocker(capability,inputs,"1:2") }
+        }
+        var sends=0
+        suspend fun send(scope: String)=runner.execute(CapabilityIds.TIKTOK_PUBLIC_COMMENT,"community-proof","exact-post","Useful question",
+            inputs=mapOf("target" to "exact-post","content" to "Useful question","shop_scope" to scope),
+            act={sends++;true},verify={VerificationEvidence(true,1.0,"com.zhiliaoapp.musically","comment_visible",1L)})
+        assertTrue(send("3:4") is SideEffectOutcome.Rejected)
+        assertTrue(ledger.store.isEmpty())
+        assertTrue(send("1:2") is SideEffectOutcome.Verified)
+        assertTrue(send("1:2") is SideEffectOutcome.DuplicateBlocked)
+        assertEquals(1,sends)
+    }
+
     @Test fun configuredManagerReportPassesSchemaAndActuallyDispatchesOnce() = runBlocking {
         val ledger=FakeLedger()
         val target="+256700123456"
@@ -83,13 +117,50 @@ class SideEffectTransactionTest {
 
     @Test fun cancellationAfterDispatchRemainsUncertainAndPropagates(): Unit = runBlocking {
         val ledger=FakeLedger()
+        val transitions = mutableListOf<String>()
+        val runner = SideEffectRunner(ledger).apply {
+            evaluationObserver = { state, _, _ -> transitions.add(state); Unit }
+        }
         try {
-            SideEffectRunner(ledger).execute("send_whatsapp", "cancel-proof", "A", "msg", initiator=Initiator.OWNER_CHAT,
+            runner.execute("send_whatsapp", "cancel-proof", "A", "msg", initiator=Initiator.OWNER_CHAT,
                 act={ throw kotlinx.coroutines.CancellationException("deadline") },
                 verify={ error("Must not verify after cancellation") })
             throw AssertionError("Cancellation was swallowed")
         } catch (_: kotlinx.coroutines.CancellationException) {
             assertEquals(SideEffectState.UNCERTAIN, ledger.find("cancel-proof")?.state)
+            assertEquals(1, transitions.count { it == "UNCERTAIN" })
+        }
+    }
+
+    @Test fun cancellationDuringSynchronousGuardNeverClaimsOrDispatches(): Unit = runBlocking {
+        val ledger = FakeLedger()
+        val job = kotlinx.coroutines.Job()
+        val runner = SideEffectRunner(ledger).apply {
+            businessScopeGuard = { _, _ -> job.cancel(); null }
+        }
+        try {
+            kotlinx.coroutines.withContext(job) {
+                runner.execute("send_whatsapp", "expired", "A", "msg", initiator=Initiator.OWNER_CHAT,
+                    act={ error("Expired work must not dispatch") }, verify={ error("No effect") })
+            }
+            throw AssertionError("Cancellation was swallowed")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            assertTrue(ledger.store.isEmpty())
+        }
+    }
+
+    @Test fun cancellationDuringPreflightIsProvenNotSent(): Unit = runBlocking {
+        val ledger = FakeLedger()
+        val job = kotlinx.coroutines.Job()
+        try {
+            kotlinx.coroutines.withContext(job) {
+                SideEffectRunner(ledger).execute("send_whatsapp", "preflight-cancel", "A", "msg", initiator=Initiator.OWNER_CHAT,
+                    preflight={ job.cancel(); null },
+                    act={ error("Cancelled preflight must not dispatch") }, verify={ error("No effect") })
+            }
+            throw AssertionError("Cancellation was swallowed")
+        } catch (_: kotlinx.coroutines.CancellationException) {
+            assertEquals(SideEffectState.CANCELLED, ledger.find("preflight-cancel")?.state)
         }
     }
 

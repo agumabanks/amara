@@ -30,7 +30,7 @@ class OwnerPowerTest {
         assertNull(RecoveryExperience(context).provenStrategy("test-screen"))
     }
 
-    @Test fun recallIsPerConversationAndLimitedToTwoDays() {
+    @Test fun recallIsPerConversationAcrossDays() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         context.deleteDatabase("amara_chats.db")
         ChatStore(context).use { store ->
@@ -38,7 +38,8 @@ class OwnerPowerTest {
             store.writableDatabase.execSQL("UPDATE chats SET timestamp=?", arrayOf(System.currentTimeMillis()-3*86_400_000L))
             store.storeMessage("a", "Customer", "received", "recent")
             store.storeMessage("b", "Other", "received", "private")
-            assertEquals(listOf("recent"), store.getChatHistory("a").map { it.text })
+            assertEquals(listOf("old", "recent"), store.getChatHistory("a").map { it.text })
+            assertFalse(store.getChatHistory("a").any { it.text == "private" })
         }
     }
 }

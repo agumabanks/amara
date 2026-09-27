@@ -141,7 +141,7 @@ class SafetyGovernor(
         val dailyMessages = getCounter("daily", "messages_sent", dayStart)
         // Owner-scheduled groups have their own cadence, permissions and delivery
         // holds. Customer replies must not silently consume their entire allowance.
-        if (!destinationManagedGroup && dailyMessages >= 40 && item.kind in setOf(WorkKind.WA_FOLLOWUP, WorkKind.WA_BROADCAST)) {
+        if (!destinationManagedGroup && dailyMessages >= 40 && item.kind in setOf(WorkKind.WA_FOLLOWUP, WorkKind.WA_BROADCAST, WorkKind.WA_MEETING_REMINDER)) {
             return BreakerVerdict(false, "Daily message limit reached (40)")
         }
 
@@ -168,7 +168,7 @@ class SafetyGovernor(
 
         if (result.status == WorkStatus.DONE) {
             incrementCounter("daily", "successes", dayStart, 1)
-            if (result.item.kind in setOf(WorkKind.WA_FOLLOWUP, WorkKind.WA_REPLY_INBOUND, WorkKind.WA_BROADCAST)) {
+            if (result.item.kind in setOf(WorkKind.WA_FOLLOWUP, WorkKind.WA_REPLY_INBOUND, WorkKind.WA_BROADCAST, WorkKind.WA_MEETING_REMINDER)) {
                 incrementCounter("daily", "messages_sent", dayStart, 1)
             }
         } else if (result.status == WorkStatus.FAILED) {
@@ -248,9 +248,40 @@ class SafetyGovernor(
 
     fun cooldownFor(item: WorkItem): Long = getKindBreakerCooldown(item.kind, breakerKey(item))
 
+    /**
+     * Release cooldowns whose trip predates a replacement build containing a repair.
+     * Historical totals and trip receipts stay intact; only the temporary hold and
+     * consecutive streak are reset. Callers must explicitly name the repaired kinds.
+     */
+    @Synchronized
+    fun clearCooldownsTrippedBefore(kinds: Set<WorkKind>, cutoff: Long): Int {
+        if (kinds.isEmpty() || cutoff <= 0L) return 0
+        var changed = 0
+        for (kind in kinds) {
+            val openBeforeUpdate = readableDatabase.rawQuery(
+                "SELECT 1 FROM kind_breakers WHERE kind=? AND cooldown_until>? AND last_trip_at<?",
+                arrayOf(kind.name, System.currentTimeMillis().toString(), cutoff.toString()),
+            ).use { it.moveToFirst() }
+            if (openBeforeUpdate) {
+                writableDatabase.execSQL(
+                    "UPDATE kind_breakers SET cooldown_until=0, consecutive_failures=0 WHERE kind=? AND last_trip_at<?",
+                    arrayOf(kind.name, cutoff.toString()),
+                )
+                changed++
+            }
+        }
+        return changed
+    }
+
     private fun breakerKey(item: WorkItem): String = when {
         item.payload.optBoolean("manager_report") -> "MANAGER_REPORT"
         item.payload.optBoolean("manager_command_candidate") -> "MANAGER_COMMAND"
+        item.kind == WorkKind.WA_REPLY_INBOUND && item.payload.optBoolean("inbound") -> {
+            val conversation = item.payload.optString("conversation_identity")
+                .ifBlank { item.payload.optString("conversation") }
+            if (conversation.isBlank()) item.kind.name
+            else "${item.kind.name}:${co.sanaa.agent.core.ContentHashing.hash(conversation)}"
+        }
         else -> item.kind.name
     }
 

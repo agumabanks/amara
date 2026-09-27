@@ -1,5 +1,7 @@
 # Amara platform reliability mission
 
+Current follow-on specification: [fleet reliability mission](../amara-fleet-network-20260923/README.md), including [WhatsApp and community reliability gates](../amara-fleet-network-20260923/RELIABILITY_GATES.md). Its platform-specific YouTube content direction supersedes this document’s earlier TikTok-export-only direction for future work; historical evidence remains unchanged.
+
 Owner: project owner. Implementation and evidence: Codex.
 Created: 2026-09-20, Europe/Berlin.
 Status: ACTIVE — authenticated catalogue restored; final release and live platform acceptance remain incomplete.

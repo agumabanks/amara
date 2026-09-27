@@ -33,8 +33,7 @@ class ShortsPublisher(private val context: Context, private val actions: Accessi
         }
         if(runtime.memory.findSideEffectTransaction(source)?.let { it.capability==CapabilityIds.POST_TIKTOK && it.state==SideEffectState.VERIFIED } != true)
             return held("Source TikTok publication is not verified")
-        val day=java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
-        if(!prepareOnly && transactions.count { it.capability==CapabilityIds.POST_YOUTUBE_SHORT && it.createdAt>=day }>=settings.dailyCap)
+        if(!prepareOnly && ShortsCadence.dailyDispatches(transactions, channel, System.currentTimeMillis(), settings.zone)>=settings.dailyCap)
             return WorkResult(item,WorkStatus.SKIPPED,failure=FailureInfo(FailureClass.POLICY_BLOCKED,"YouTube daily cap reached",true))
         val scope=item.payload.optString("shop_scope")
         val shop=ShopSessionRecovery(read={TerminalShopIdentity.readFresh(context)},
@@ -53,7 +52,13 @@ class ShortsPublisher(private val context: Context, private val actions: Accessi
             reopen={actions.openSokoTerminal() && actions.waitForForegroundPackage("com.soko24.soko_seller_terminal")!=null},
             settle={delay(1000)}).ensure()
         if(refreshedShop.scope!=scope) return held("Terminal shop changed during media preparation")
-        if(!settings.enabled || settings.channel!=channel || !OwnerPower(context).isOn())
+        if(!OwnerPower(context).isOn()) {
+            ShortsQueue(context).use { it.update(source,"HELD","Owner paused Amara before upload dispatch") }
+            settings.status("Owner paused Amara; no upload dispatched")
+            return WorkResult(item,WorkStatus.SKIPPED,
+                failure=FailureInfo(FailureClass.POLICY_BLOCKED,"Owner paused Amara before upload dispatch",false))
+        }
+        if(!settings.enabled || settings.channel!=channel)
             return held("Amara or YouTube settings changed during preparation")
         val digest=BoundTikTokMedia.sha256(normalized.readBytes())
         val surface=ShortsDeviceSurface(context,actions)
@@ -75,11 +80,35 @@ class ShortsPublisher(private val context: Context, private val actions: Accessi
             preflight={ if(!settings.enabled || settings.channel!=channel || !settings.audioCleared ||
                 settings.visibility!=visibility || settings.madeForKids!=madeForKids) "YouTube settings changed" else null },
             act={ actions.transacted { publishYouTubeShort(channel,title,caption) } },verify={surface.verify(title,channel)})
-        val verified=outcome is SideEffectOutcome.Verified || outcome is SideEffectOutcome.DuplicateBlocked
-        val status=if(verified) "VERIFIED" else if(outcome is SideEffectOutcome.Uncertain) "UNCERTAIN" else "HELD"
+        if(WorkExecutor.ownerStoppedBeforeDispatch(outcome)) {
+            ShortsQueue(context).use { it.update(source,"HELD","Owner paused Amara before upload dispatch") }
+            settings.status("Owner paused Amara; no upload dispatched")
+            return WorkResult(item,WorkStatus.SKIPPED,
+                failure=FailureInfo(FailureClass.POLICY_BLOCKED,"Owner paused Amara before upload dispatch",false))
+        }
+        val verified=outcome is SideEffectOutcome.Verified ||
+            (outcome is SideEffectOutcome.DuplicateBlocked && outcome.existingState == SideEffectState.VERIFIED)
+        val possibleDispatch = ShortsCadence.consumes(outcome) && !verified
+        val status=if(verified) "VERIFIED" else if(possibleDispatch) "UNCERTAIN" else "HELD"
+        if(outcome is SideEffectOutcome.Failed || outcome is SideEffectOutcome.Rejected ||
+            (outcome is SideEffectOutcome.DuplicateBlocked && !outcome.existingState.noAutoRetry)) {
+            // Proven pre-dispatch failure: the external trigger never dispatched, so the
+            // prepared editor holds no upload evidence and can be cleaned up. UNCERTAIN
+            // outcomes keep the editor state for owner review instead.
+            val closed=surface.discardPreparation()
+            ShortsQueue(context).use { it.update(source,status,
+                "Shorts upload was not dispatched: $outcome" + if(closed) "; editor closed" else "; editor needs review") }
+            settings.status("Shorts upload was not dispatched")
+            return WorkResult(item,WorkStatus.ESCALATED,
+                failure=FailureInfo(FailureClass.UNKNOWN,"Shorts dispatch: $outcome",false))
+        }
         ShortsQueue(context).use { it.update(source,status,outcome.toString()) }
         settings.status("$status: $title")
-        context.getSharedPreferences("youtube_shorts",Context.MODE_PRIVATE).edit().putLong("next_at",System.currentTimeMillis()+settings.intervalMinutes*60_000L).apply()
+        // Only a possible or proven external dispatch consumes the interval.
+        // The durable receipt also reconstructs the deadline if the process dies
+        // before this legacy preference is committed.
+        if(verified || possibleDispatch) context.getSharedPreferences("youtube_shorts",Context.MODE_PRIVATE).edit()
+            .putLong("next_at",System.currentTimeMillis()+settings.intervalMinutes*60_000L).commit()
         return WorkResult(item,if(verified) WorkStatus.DONE else WorkStatus.ESCALATED,
             outcomeFacts=if(verified) listOf("Verified Short: $title on $channel") else emptyList(),
             failure=if(verified) null else FailureInfo(FailureClass.UNKNOWN,"Shorts outcome: $outcome",false))

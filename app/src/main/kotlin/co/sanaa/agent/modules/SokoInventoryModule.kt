@@ -9,6 +9,7 @@ data class SokoInventoryResult(
     val success: Boolean,
     val summary: String,
     val items: List<SokoInventoryItem> = emptyList(),
+    val reachedEnd: Boolean = false,
 )
 
 /** Read-only Soko catalogue learning. It never opens an editor or changes a listing. */
@@ -51,7 +52,7 @@ class SokoInventoryModule(
             TYPE, null, "Soko Terminal", "Read the Soko inventory", "Scanned and deduplicated the Soko catalogue without editing it.",
             result, null, true,
         )
-        return SokoInventoryResult(true, result, scan.items)
+        return SokoInventoryResult(true, result, scan.items, scan.reachedEnd)
     }
 
     companion object {

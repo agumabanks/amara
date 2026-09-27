@@ -7,13 +7,15 @@ import java.io.File
 
 /** Hardware AVC encoding with bounded duration, timeout and memory; works without a server renderer. */
 object AmaraVideoEncoder {
-    fun render(output: File, ad: AmaraAdSpec, encodedPhotos: List<ByteArray>) {
+    fun render(output: File, ad: AmaraAdSpec, encodedPhotos: List<ByteArray>, ensureActive: () -> Unit = {}) {
+        ensureActive()
         require(encodedPhotos.size in 1..4)
         val photos=mutableListOf<Bitmap>()
         var codec: MediaCodec?=null;var muxer: MediaMuxer?=null;var started=false;var complete=false
         val frame=Bitmap.createBitmap(AmaraMotionScene.WIDTH,AmaraMotionScene.HEIGHT,Bitmap.Config.ARGB_8888)
         try {
             encodedPhotos.forEach { bytes ->
+                ensureActive()
                 val opts=BitmapFactory.Options().apply { inJustDecodeBounds=true }
                 BitmapFactory.decodeByteArray(bytes,0,bytes.size,opts)
                 require(opts.outWidth>0 && opts.outHeight>0)
@@ -38,6 +40,7 @@ object AmaraVideoEncoder {
             val pixels=IntArray(width*height)
             val deadline=android.os.SystemClock.elapsedRealtime()+180_000L
             while(!complete) {
+                ensureActive()
                 check(android.os.SystemClock.elapsedRealtime()<deadline) { "Ad video encoding timed out" }
                 if(!inputDone) {
                     val slot=encoder.dequeueInputBuffer(10_000)
@@ -56,6 +59,8 @@ object AmaraVideoEncoder {
                 }
                 var out=encoder.dequeueOutputBuffer(info,10_000)
                 while(out!=MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    ensureActive()
+                    check(android.os.SystemClock.elapsedRealtime()<deadline) { "Ad video encoding timed out" }
                     if(out==MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         check(!started);track=writer.addTrack(encoder.outputFormat);writer.start();started=true
                     } else if(out>=0) {

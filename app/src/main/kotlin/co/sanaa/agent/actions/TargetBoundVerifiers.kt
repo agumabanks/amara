@@ -19,7 +19,7 @@ internal suspend fun awaitTikTokPublication(
     pollMs: Long = 3_000,
     progress: () -> String? = { null },
 ): VerificationEvidence = kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
-    val budget = UiProgressBudget(minOf(45_000L, timeoutMs), timeoutMs)
+    val budget = UiProgressBudget(minOf(90_000L, timeoutMs), timeoutMs)
     while (true) {
         kotlinx.coroutines.delay(pollMs)
         if (!foregroundAllowed()) return@withTimeoutOrNull VerificationEvidence.impossible("TikTok verification yielded after the foreground app changed.")

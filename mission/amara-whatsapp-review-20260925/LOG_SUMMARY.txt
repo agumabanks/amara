@@ -1,0 +1,14 @@
+OPPO
+73: ('WA_BROADCAST', 'SKIPPED', 'Prior group effect may have been dispatched; review or reconcile its receipt before retry; no send attempted; next check in 30 minutes')
+54: ('WA_REPLY_INBOUND', 'DONE', '')
+18: ('WA_BROADCAST', 'SKIPPED', 'Exact group conversation could not be verified: search_input: editable search field unavailable; no send attempted; next check in 30 minutes')
+14: ('WA_REPLY_INBOUND', 'ESCALATED', 'Exact queued reply destination unavailable: WhatsApp contact information did not expose the exact configured phone number')
+13: ('WA_REPLY_INBOUND', 'FAILED', 'Originating WhatsApp conversation could not be verified: WhatsApp opened but the exact conversation and incoming message were not visible together')
+11: ('WA_BROADCAST', 'SKIPPED', 'Exact group conversation could not be verified: search_result: no single exact contact result; no send attempted; next check in 30 minutes')
+4: ('WA_REPLY_INBOUND', 'SKIPPED', 'WhatsApp replies are disabled')
+2: ('WA_BROADCAST', 'SKIPPED', '')
+2: ('WA_BROADCAST', 'FAILED', 'Group publication: picker_search')
+2: ('WA_REPLY_INBOUND', 'ESCALATED', 'Exact queued reply destination unavailable: WhatsApp did not open the configured phone conversation')
+2: ('WA_BROADCAST', 'SKIPPED', 'Exact group conversation could not be verified: navigation: wait for WhatsApp foreground; no send attempted; next check in 30 minutes')
+1: ('WA_BROADCAST', 'SKIPPED', 'Exact group conversation could not be verified: search_surface: search control unavailable after bounded recovery; no send attempted; next check in 30 minutes')
+TPS

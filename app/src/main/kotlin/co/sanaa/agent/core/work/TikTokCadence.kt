@@ -20,11 +20,10 @@ class TikTokCadence(context: Context) {
     fun finishOpportunity(key: String, intervalMinutes: Long, now: Long = System.currentTimeMillis(), verified: Boolean = true) {
         val due = prefs.getLong("due", 0)
         if (key != "tiktok-due-$due") return
-        val interval = randomDelayMillis(intervalMinutes)
-        // Keep the selected wall-clock cadence. Skip missed slots instead of
-        // adding render/upload time to every interval or bursting after a pause.
-        val next = if (verified) due + ((now - due).coerceAtLeast(0) / interval + 1) * interval
-            else now + 5 * 60_000L
+        // A delayed upload still consumes an opportunity. Start the owner's
+        // minimum interval at its settled result so missed slots cannot cause
+        // two public posts only a few minutes apart.
+        val next = now + randomDelayMillis(intervalMinutes)
         check(prefs.edit().putLong("interval", intervalMinutes)
             .putLong("due", next)
             .putBoolean("last_verified", verified).commit())

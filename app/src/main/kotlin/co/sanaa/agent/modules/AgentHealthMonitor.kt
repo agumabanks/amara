@@ -30,6 +30,7 @@ class AgentHealthMonitor(
     private val scheduleBlockers: () -> List<String> = { emptyList() },
     private val reconcile: () -> Unit = {},
     private val governorDashboard: () -> Map<String, Any> = { emptyMap() },
+    private val pendingWorkCount: () -> Int? = { null },
 ) {
     private val alertDelivery = HealthAlertDelivery(context)
     fun acknowledgeAlerts() {
@@ -48,6 +49,7 @@ class AgentHealthMonitor(
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
         val batteryPercent = if (level >= 0 && scale > 0) level * 100 / scale else -1
+        val batteryPaused = co.sanaa.agent.core.work.BatteryWorkHold(context).observe(batteryPercent)
         val charging = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) in setOf(
             BatteryManager.BATTERY_STATUS_CHARGING, BatteryManager.BATTERY_STATUS_FULL,
         )
@@ -81,8 +83,10 @@ class AgentHealthMonitor(
             }
             if (!isInstalled("com.soko24.soko_seller_terminal")) add("Soko Seller Terminal is not installed")
             if (!network.validated) add(if (network.state == ConnectivityMonitor.ConnectivityState.OFFLINE) "No internet connection" else "Internet connection is limited")
-            if (batteryPercent in 0..LOW_BATTERY_PERCENT) add("Battery is $batteryPercent%; screen work pauses at 15% or lower")
-            if (!charging && batteryPercent in 16..20) add("Battery is low; connect power before work pauses at 15%")
+            if (batteryPaused) add(if (batteryPercent >= 0)
+                "Battery is $batteryPercent%; screen work is paused until charge reaches 20%"
+                else "Battery reading is unavailable; the prior low-battery pause remains until a valid reading reaches 20%")
+            if (!batteryPaused && !charging && batteryPercent in 16..20) add("Battery is low; connect power before work pauses at 15%")
             storageBlocker()?.let(::add)
             if (screenLimit - screenUsed < 180) add("Daily screen budget has less than three minutes left; scheduled screen work is waiting for renewal")
             if (governor["state"] == "HALTED") add("Autonomy is halted; owner review is required")
@@ -95,12 +99,17 @@ class AgentHealthMonitor(
             if (inboundReserveLeft == 0 && screenUsed >= screenLimit)
                 add("The inbound reply reserve has been used; new customer replies remain queued until the normal phone-time budget renews")
         }
+        val remote = co.sanaa.agent.core.SecureConfig(context)
         return mapOf(
+            "nightlyDoctor" to co.sanaa.agent.core.work.NightlyDoctorCleanup.diagnostics(context),
             "backend" to backendStatus, "issueHistory" to issueHistory.rows(), "lastCheckAt" to healthPrefs.getLong("last_at",0L), "checkIntervalMinutes" to 30,
             "healthy" to blockers.isEmpty(), "blockers" to blockers, "network" to network.state.name,
-            "transport" to network.transportType, "batteryPercent" to batteryPercent, "charging" to charging,
+            "transport" to network.transportType, "batteryPercent" to batteryPercent, "batteryPaused" to batteryPaused,
+            "charging" to charging,
             "accessibilityBound" to accessibility.isAvailable(), "serviceRunning" to isServiceRunning(),
-            "loop" to loop, "governor" to governor, "updatedAt" to now,
+            "loop" to loop, "governor" to governor, "pendingWorkCount" to (runCatching { pendingWorkCount() }.getOrNull() ?: "unknown"), "updatedAt" to now,
+            "remoteCommandRevision" to remote.remoteCommandRevision, "remoteWorkPaused" to remote.remoteWorkPaused,
+            "systemLockout" to remote.systemLockout,
         )
     }
 
@@ -149,6 +158,9 @@ class AgentHealthMonitor(
             co.sanaa.agent.core.EvaluationJournal(context).record("health_recovery_requested")
         }
         issueHistory.observe(blockers, now, recoveryRequested)
+        // Configuration is also the authenticated command channel. Refresh it on
+        // every health sweep so a queued admin pause/resume is observed promptly.
+        runCatching { backend.fetchConfig() }
         val after=snapshot()
         val currentBlockers=(after["blockers"] as? List<*>)?.filterIsInstance<String>().orEmpty()
         issueHistory.observe(currentBlockers, System.currentTimeMillis())
@@ -176,6 +188,23 @@ class AgentHealthMonitor(
             alertDelivery.record(newAlerts)
         }
         runCatching { backend.log(NAME, "health_check", "device", summary, failed.isEmpty(), error = failed.takeIf { it.isNotEmpty() }?.joinToString()) }
+        // The same health sweep is already serialized by sweepMutex. Keep the
+        // sample separate from bulk telemetry and only advance after server ack.
+        val reporting = co.sanaa.agent.core.SecureConfig(context)
+        if (reporting.operationalReportingEnabled && reporting.configSyncEnabled &&
+            System.currentTimeMillis() - healthPrefs.getLong("last_heartbeat_at", 0L) >= 5 * 60_000L) {
+            val acknowledged = try { backend.heartbeat(after) }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { false }
+            if (acknowledged) {
+                healthPrefs.edit().putLong("last_heartbeat_at", System.currentTimeMillis()).apply()
+            }
+        }
+        if (reporting.telemetryOptIn && reporting.configSyncEnabled) {
+            try { backend.syncEvents() }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { /* Keep the outbox for the next health sweep. */ }
+        }
         if (currentBlockers.isEmpty()) healthPrefs.edit().remove("alert_signature").apply()
         ModuleResult(NAME, failed.isEmpty(), summary, failed.takeIf { it.isNotEmpty() }?.joinToString())
     }
@@ -216,7 +245,6 @@ class AgentHealthMonitor(
         private const val FAILURE_LOOKBACK_MS = 24 * 60 * 60 * 1000L
         private const val LOOP_STALE_MS = 45 * 60 * 1000L
         private const val ALERT_INTERVAL_MS = 6 * 60 * 60 * 1000L
-        private const val LOW_BATTERY_PERCENT = 15
         private const val STORAGE_FREE_PERCENT = 5L
     }
 }

@@ -184,6 +184,7 @@ internal object TikTokSoundSelection {
         report: (String, String?) -> Unit = { _, _ -> },
         allowed: () -> Boolean = { true },
         now: () -> Long = { System.nanoTime() / 1_000_000 },
+        excludedTitles: Set<String> = emptySet(),
     ): Boolean {
         fun valid(frame: Frame) = frame.packageName == PACKAGE && frame.windowId >= 0 && frame.bounds.valid
         fun failed(reason: String, track: String? = null): Boolean {
@@ -236,7 +237,10 @@ internal object TikTokSoundSelection {
                 budget.progress("picker_visible")
                 report("PICKER_VISIBLE", null)
             }
-            val candidate = rows(frame).firstOrNull { !it.highlighted && !it.hasTrimControl() } ?: continue
+            val candidate = rows(frame).firstOrNull {
+                !it.highlighted && !it.hasTrimControl() &&
+                    normalizedTitle(it.title.text) !in excludedTitles
+            } ?: continue
             if (!candidatesObserved) {
                 candidatesObserved = true
                 budget.progress("rows_available")
@@ -252,6 +256,10 @@ internal object TikTokSoundSelection {
         var stable = 0
         var composerStable = 0
         var dismissed = false
+        var reDismissals = 0
+        var composerVisible = 0
+        var mismatchReported = false
+        var sheetPersistedReported = false
         for (attempt in 0 until 300) {
             if (!allowed()) return failed("OWNER_PAUSED")
             if (budget.expired()) return failed(if (dismissed) "COMPOSER_STALLED" else "SELECTION_STALLED", expected)
@@ -265,7 +273,34 @@ internal object TikTokSoundSelection {
                 report("SELECTED", expected)
                 return true
             }
-            if (dismissed) continue
+            composerVisible = if (composerSound(frame) != null) composerVisible + 1 else 0
+            if (composerVisible >= 3 && composerStable == 0 && !mismatchReported) {
+                // Composer visible without confirming: the exact title/remove-control
+                // check failed, distinguishable from a still-open sheet or a stall.
+                mismatchReported = true
+                report("COMPOSER_SOUND_MISMATCH", expected)
+            }
+            if (composerVisible >= 20 && composerStable == 0) {
+                return failed("COMPOSER_SOUND_MISMATCH", expected)
+            }
+            if (dismissed) {
+                // A rejected outside tap can leave the sheet open; composerSound then
+                // returns null while any sheet is visible and the budget expires as a
+                // bare stall. Re-dismiss a bounded number of times with fresh frames;
+                // closing a picker is reversible and never treats dismissal as proof
+                // that audio was attached.
+                if (sheet(frame) != null) {
+                    if (reDismissals < 2) {
+                        reDismissals++
+                        if (!dismiss(frame, chosen)) return failed("PICKER_DISMISS_FAILED", expected)
+                        budget.progress("picker_dismissed")
+                    } else if (!sheetPersistedReported) {
+                        sheetPersistedReported = true
+                        report("PICKER_SHEET_PERSISTED", expected)
+                    }
+                }
+                continue
+            }
             val row = rows(frame).singleOrNull { it.sameTrack(chosen) }
             val applied = row != null && (row.transitionedFrom(chosen) ||
                 (!chosen.hasTrimControl() && row.hasTrimControl()))
@@ -273,7 +308,11 @@ internal object TikTokSoundSelection {
             // Closing a picker is reversible. Some versions expose no selected/trim
             // signal at all: inspect the composer after a bounded settle, without
             // treating dismissal as proof that audio was attached.
-            if (row != null && (stable >= 2 || attempt >= 8)) {
+            // A visible trim control means TikTok has started previewing the row,
+            // but slower devices may still be loading the attachment. Closing the
+            // sheet immediately produced an intermittent Add sound composer on the
+            // TPS450M. Give the selected row several stable observations first.
+            if (row != null && ((stable >= 2 && attempt >= 12) || attempt >= 20)) {
                 report(if (stable >= 2) "ROW_SELECTION_CONFIRMED" else "CHECKING_COMPOSER", expected)
                 if (!dismiss(frame, row)) return failed("PICKER_DISMISS_FAILED", expected)
                 dismissed = true

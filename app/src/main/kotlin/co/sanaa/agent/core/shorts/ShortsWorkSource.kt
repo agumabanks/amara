@@ -13,14 +13,20 @@ class ShortsWorkSource(private val context: Context) : WorkSource {
             return emptyList()
         }
         val prefs = context.getSharedPreferences("youtube_shorts", Context.MODE_PRIVATE)
-        if(System.currentTimeMillis() < prefs.getLong("next_at",0)) return emptyList()
-        val day = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val attempts = co.sanaa.agent.core.AgentRuntime.get(context).memory.allSideEffectTransactions().count {
-            it.capability == co.sanaa.agent.core.CapabilityIds.POST_YOUTUBE_SHORT && it.createdAt >= day
+        val now = System.currentTimeMillis()
+        val receipts = co.sanaa.agent.core.AgentRuntime.get(context).memory.allSideEffectTransactions()
+        val nextAt = ShortsCadence.nextAt(receipts, settings.channel, settings.intervalMinutes, prefs.getLong("next_at", 0))
+        if (now < nextAt) {
+            settings.status("Next YouTube opportunity after ${java.time.Instant.ofEpochMilli(nextAt).atZone(settings.zone)}")
+            return emptyList()
         }
+        val attempts = ShortsCadence.dailyDispatches(receipts, settings.channel, now, settings.zone)
         if (attempts >= settings.dailyCap) { settings.status("Daily Shorts cap reached; waiting for tomorrow"); return emptyList() }
-        val next = ShortsQueue(context).use { it.next() } ?: return emptyList()
-        ShortsMediaPolicy.priorDispatch(next.first,co.sanaa.agent.core.AgentRuntime.get(context).memory.allSideEffectTransactions())?.let { prior ->
+        val shopScope = try { co.sanaa.agent.core.TerminalShopIdentity.readFresh(context).scope }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { settings.status("Waiting for signed Soko Terminal shop identity"); return emptyList() }
+        val next = ShortsQueue(context).use { it.nextForShop(shopScope) } ?: return emptyList()
+        ShortsMediaPolicy.priorDispatch(next.first, receipts)?.let { prior ->
             ShortsQueue(context).use { it.update(next.first,
                 if(prior.state==co.sanaa.agent.core.SideEffectState.VERIFIED) "VERIFIED" else "UNCERTAIN",
                 "Prior upload receipt recovered; automatic replay blocked") }

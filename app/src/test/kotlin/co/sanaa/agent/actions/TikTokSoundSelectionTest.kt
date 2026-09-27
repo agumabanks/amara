@@ -193,6 +193,30 @@ class TikTokSoundSelectionTest {
         assertFalse(flow(dismissAccepted = false).verified)
     }
 
+    @Test fun rejectedRecommendationCanBeExcludedOnTheNextPickerAttempt() = runBlocking {
+        val other = "Reliable second track"
+        val twoRows = picker().let { frame -> frame.copy(nodes = frame.nodes + listOf(
+            node("0/2/1", bounds = Bounds(40, 1200, 960, 1450), clickable = true),
+            node("0/2/1/0", "title", other, Bounds(100, 1250, 700, 1350)),
+        )) }
+        var opened = false
+        var tapped = ""
+        var dismissed = false
+        assertTrue(TikTokSoundSelection.select(
+            observe = { when {
+                dismissed -> composer(other)
+                tapped.isNotBlank() -> twoRows.change("0/2/1") { it.copy(selected = true) }
+                opened -> twoRows
+                else -> composer()
+            } },
+            openPicker = { opened = true; true },
+            tapRow = { _, row -> tapped = row.title.text; true },
+            dismiss = { _, _ -> dismissed = true; true },
+            pause = {}, excludedTitles = setOf(track),
+        ))
+        assertEquals(other, tapped)
+    }
+
     @Test fun outsidePointRequiresValidSheetBoundsAndAvoidsControls() {
         assertEquals(500 to 400, TikTokSoundSelection.outsidePoint(picker()))
         assertNull(TikTokSoundSelection.outsidePoint(picker().change("0/2") { it.copy(bounds = window) }))

@@ -10,7 +10,7 @@ data class AmaraAdSpec(val headline: String, val price: String, val whatsapp: St
         .put("background", background).put("format", format).put("gallery", org.json.JSONArray(gallery)).put("template", template).put("price", price).put("whatsapp", whatsapp ?: "").put("brand", brand)
 
     companion object {
-        const val VERSION = "amara-creative-v5"
+        const val VERSION = "amara-creative-v7"
         fun phone(raw: String): String? {
             if (!raw.trim().matches(Regex("\\+?[0-9 ()-]+"))) return null
             val digits = raw.filter(Char::isDigit)
@@ -33,16 +33,9 @@ data class AmaraAdSpec(val headline: String, val price: String, val whatsapp: St
             phone(json.optString("whatsapp")),json.getString("brand"),
             json.optJSONArray("gallery")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty(),
             json.optString("template","editorial"),json.optInt("background",0),json.optString("format","video"))
-        fun from(listing: SokoListing, publicWhatsApp: String = "", businessName: String = "Sanaa Media"): AmaraAdSpec {
+        fun from(listing: SokoListing, publicWhatsApp: String = "", businessName: String = "Sanaa Media", headline: String? = null): AmaraAdSpec {
             val title = listing.title.replace(Regex("\\s+"), " ").trim()
-            val short = listing.raw.optString("ad_short_name").trim().takeIf { candidate ->
-                candidate.isNotBlank() && candidate.split(Regex("\\s+")).size <= 2 && title.contains(candidate, true)
-            } ?: listOf("business cards", "date stamp", "rubber stamp", "company stamp", "logo design", "graphic design",
-                "web design", "website design", "banner printing", "flyer printing", "poster printing", "receipt books",
-                "invoice books", "t-shirt printing", "office chair", "face masks", "company flag", "social media", "event badges", "name tags").firstOrNull { phrase ->
-                    Regex("(?i)(?<![\\p{L}\\p{N}])" + Regex.escape(phrase) + "(?![\\p{L}\\p{N}])").containsMatchIn(title)
-                }?.split(" ")?.joinToString(" ") { it.replaceFirstChar(Char::titlecase) }
-                ?: title.split(" ").take(2).joinToString(" ")
+            val short = headline?.let { AdHeadline.validated(title, it) } ?: AdHeadline.fallback(title)
             val contact = phone(listing.raw.optString("whatsapp_number")) ?: phone(publicWhatsApp)
             val images = buildList {
                 listing.imageUrl?.let(::add)

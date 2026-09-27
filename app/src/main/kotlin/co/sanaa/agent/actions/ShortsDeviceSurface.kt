@@ -123,19 +123,63 @@ internal class ShortsDeviceSurface(private val context: Context, private val act
     /** Only invoked inside AccessibilityActions.TransactionScope. */
     suspend fun dispatch(channel: String, title: String, description: String): Boolean {
         val settings=co.sanaa.agent.core.shorts.ShortsSettings(context)
+        stage("dispatch")
+        if(actions.snapshot().packageName!=PACKAGE) return reject(ShortsDispatchGuards.WINDOW_NOT_READY)
         var text=labels()
-        if("Add details" !in text || text.none { it.equals(channel,true) }) return false
-        if("Add description" !in text && !tap("Show more")) return false
-        if(!tap("Add description")) return false
-        delay(500)
-        if(fields().singleOrNull()?.text?.toString()!=description) return false
-        if(!actions.clickExactLabel("Navigate up","Back")) return false
-        delay(500)
-        text=labels()
-        if(!settings.enabled || !settings.audioCleared || settings.channel!=channel ||
-            settings.visibility !in text || !audienceMatches(text,settings.madeForKids)) return false
-        if("Add details" !in text || text.none { it.equals(channel,true) } || fields().singleOrNull()?.text?.toString()!=title.take(100)) return false
-        return actions.clickExactLabel("Upload Short")
+        if(!ShortsDispatchGuards.onDetailsScreen(text)) return reject(ShortsDispatchGuards.DETAILS_NOT_VISIBLE)
+        if(!ShortsDispatchGuards.channelVisible(text,channel)) return reject(ShortsDispatchGuards.CHANNEL_NOT_VISIBLE)
+        // prepare() verified the filled description inside the editor moments ago.
+        // After returning, the row shows the entered text (or a truncated preview),
+        // not the placeholder; requiring the placeholder tap then blocked the final
+        // dispatch (release39 ACTING→FAILED). Only re-enter when it is still needed.
+        if(ShortsDispatchGuards.descriptionPlaceholder(text)) {
+            if(!tap("Add description")) return reject(ShortsDispatchGuards.DESCRIPTION_CONTROL)
+            delay(500)
+            if(!ShortsDispatchGuards.singleFieldEquals(fields().map { it.text?.toString().orEmpty() },description))
+                return reject(ShortsDispatchGuards.DESCRIPTION_TEXT)
+            if(!actions.clickExactLabel("Navigate up","Back")) return reject(ShortsDispatchGuards.EDITOR_CLOSE)
+            delay(500)
+            text=labels()
+        } else if(!ShortsDispatchGuards.descriptionVisible(text,description)) {
+            if(!tap("Show more")) return reject(ShortsDispatchGuards.DESCRIPTION_NOT_OBSERVABLE)
+            delay(500)
+            if(!tap("Add description")) return reject(ShortsDispatchGuards.DESCRIPTION_CONTROL)
+            delay(500)
+            if(!ShortsDispatchGuards.singleFieldEquals(fields().map { it.text?.toString().orEmpty() },description))
+                return reject(ShortsDispatchGuards.DESCRIPTION_TEXT)
+            if(!actions.clickExactLabel("Navigate up","Back")) return reject(ShortsDispatchGuards.EDITOR_CLOSE)
+            delay(500)
+            text=labels()
+        }
+        if(!settings.enabled) return reject(ShortsDispatchGuards.SHORTS_DISABLED)
+        if(!settings.audioCleared) return reject(ShortsDispatchGuards.SOUNDTRACK_NOT_CLEARED)
+        if(settings.channel!=channel) return reject(ShortsDispatchGuards.CHANNEL_CHANGED)
+        if(!ShortsDispatchGuards.visibilityVisible(text,settings.visibility)) return reject(ShortsDispatchGuards.VISIBILITY_NOT_VISIBLE)
+        if(!ShortsDispatchGuards.audienceMatches(text,settings.madeForKids)) return reject(ShortsDispatchGuards.AUDIENCE_MISMATCH)
+        if(!ShortsDispatchGuards.onDetailsScreen(text) || !ShortsDispatchGuards.channelVisible(text,channel)) return reject(ShortsDispatchGuards.DETAILS_NOT_VISIBLE)
+        if(!ShortsDispatchGuards.titleFilled(fields().map { it.text?.toString().orEmpty() },title.take(100))) return reject(ShortsDispatchGuards.TITLE_DRIFT)
+        if(!co.sanaa.agent.core.OwnerPower(context).isOn()) return reject(ShortsDispatchGuards.OWNER_OFF)
+        var accepted=false
+        repeat(12) {
+            if (accepted || actions.snapshot().packageName != PACKAGE || !co.sanaa.agent.core.OwnerPower(context).isOn()) return@repeat
+            // Current YouTube exposes a stable button ID even when its semantic label
+            // arrives late or is clipped below the accessibility viewport.
+            accepted = actions.clickViewId("$PACKAGE:id/upload_bottom_button") ||
+                actions.clickExactLabel("Upload Short") || ocr.tap(PACKAGE,"Upload Short")
+            if (!accepted) delay(500)
+        }
+        co.sanaa.agent.core.AgentRuntime.get(context).memory.recordSelectorOutcome(PACKAGE,"shorts_upload_short",
+            "semantic_or_local_text:Upload Short",accepted,
+            if(accepted) "Upload control accepted tap" else "Upload control not found or not clickable")
+        if(!accepted) return reject(ShortsDispatchGuards.UPLOAD_CONTROL)
+        return true
+    }
+    /** Privacy-safe rejection: a bounded reason code only, never screen content. */
+    private fun reject(reason: String): Boolean {
+        lastStage="dispatch:$reason"
+        co.sanaa.agent.core.EvaluationJournal(context).record("youtube_dispatch_rejection",
+            fields=org.json.JSONObject().put("reason",reason).put("stage",lastStage))
+        return false
     }
     suspend fun discardPreparation(): Boolean {
         repeat(6) {
@@ -155,7 +199,10 @@ internal class ShortsDeviceSurface(private val context: Context, private val act
         return false
     }
     suspend fun verify(title: String, channel: String): VerificationEvidence {
+        val visibility=co.sanaa.agent.core.shorts.ShortsSettings(context).visibility
         val budget=UiProgressBudget(45_000,180_000)
+        var openedYou=false
+        var openedLatest=false
         while(!budget.expired()) {
             if(actions.snapshot().packageName!=PACKAGE) break
             val text=labels()
@@ -164,14 +211,24 @@ internal class ShortsDeviceSurface(private val context: Context, private val act
             if(text.any { it.equals(channel,true) } && text.any { it==title.take(100) } &&
                 text.any { it.equals("Upload complete",true) || it.equals("Published",true) })
                 return VerificationEvidence(true,0.9,PACKAGE,"own_channel_short_published",System.currentTimeMillis())
+            // YouTube 21.37 may omit the completion text and title from the channel
+            // grid. Its owner-only Your videos route opens the newest video and
+            // exposes the exact title, @channel and visibility together. Navigation
+            // is read-only and happens only after the Upload control accepted a tap.
+            if (ShortsDispatchGuards.publicationVisible(text,title,channel,visibility))
+                return VerificationEvidence(true,0.95,PACKAGE,"newest_own_channel_short",System.currentTimeMillis())
+            if (!openedLatest && text.any { it.equals(channel,true) } && "Your videos" in text) {
+                if (actions.clickExactLabel("Your videos")) { openedLatest=true;budget.progress("your_videos");delay(1200);continue }
+            }
+            if (!openedYou && "You" in text) {
+                if (actions.clickExactLabel("You")) { openedYou=true;budget.progress("you");delay(1000);continue }
+            }
             delay(1500)
         }
         return VerificationEvidence.impossible("YouTube publication remains unproven; review without reuploading")
     }
     companion object { const val PACKAGE="com.google.android.youtube" }
 
-    private fun audienceMatches(text: List<String>, madeForKids: Boolean): Boolean = text.any {
-        if(madeForKids) it.equals("Yes, it's made for kids",true) || it.equals("Made for kids",true)
-        else it.contains("not made for kids",true)
-    }
+    private fun audienceMatches(text: List<String>, madeForKids: Boolean): Boolean =
+        ShortsDispatchGuards.audienceMatches(text, madeForKids)
 }

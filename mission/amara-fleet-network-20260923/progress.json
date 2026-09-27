@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "mission": "amara-fleet-network-20260923",
+  "planning_status": "ready",
+  "implementation_status": "in_progress",
+  "phases": [
+    {
+      "id": "P0",
+      "title": "Evidence and immediate blockers",
+      "depends_on": [],
+      "status": "blocked",
+      "evidence": [
+        "evidence/P0-report.md",
+        "evidence/P0-current-build-summary.json",
+        "evidence/P0-database-inventory.json",
+        "evidence/P0-restore-rehearsal.json",
+        "evidence/P0-storage-follow-up.md",
+        "evidence/P0-config-correlation-checkpoint.md",
+        "evidence/P0-cards-local-backup.md",
+        "evidence/P0-device-connectivity-checkpoint.md",
+        "evidence/P2-youtube-app-notices-20260925.md"
+      ],
+      "checks": {
+        "implementation": true,
+        "tests": false,
+        "deployment": true,
+        "live": false
+      },
+      "blocker": "Exact YouTube Notices, complete current-build 24-hour coverage, historical request-level config cause, old-shop effect quarantine and off-host backup/PITR evidence are pending."
+    },
+    {
+      "id": "P1",
+      "title": "Queue isolation and health alerts",
+      "depends_on": [
+        "P0"
+      ],
+      "status": "planned",
+      "evidence": [
+        "evidence/P1-build-checkpoint.md",
+        "evidence/P1-network-cancellation-checkpoint.md",
+        "evidence/P1-owner-chat-canary.md",
+        "evidence/P1-C1-short-caption-checkpoint.md",
+        "evidence/P1-build71-checkpoint.md",
+        "evidence/P1-W2-recovery-diagnosis-checkpoint.md",
+        "evidence/P1-build72-checkpoint.md",
+        "evidence/P1-owner-timezone-checkpoint.md",
+        "evidence/P1-build75-owner-stop-checkpoint.md",
+        "evidence/P1-whatsapp-catalogue-consultations-20260925.md",
+        "evidence/P1-build76-live-summary.json",
+        "evidence/P1-pre76-live-summary.json",
+        "evidence/P1-catalogue-bug-hunt-20260925.md",
+        "evidence/P1-shop-nightly-business-20260925.md",
+        "evidence/P1-pre77-live-summary.json",
+        "evidence/P1-build77-hours-review.md",
+        "evidence/P1-headlines-platform-review-20260925.md",
+        "evidence/P1-build80-followup-summary.json",
+        "evidence/P1-build82-headlines-groups.md"
+      ],
+      "checks": {
+        "implementation": false,
+        "tests": false,
+        "deployment": false,
+        "live": false
+      },
+      "blocker": null,
+      "tracks": [
+        {
+          "id": "W1",
+          "status": "planned",
+          "evidence": [
+            "evidence/P1-W1-origin-checkpoint.md"
+          ]
+        },
+        {
+          "id": "W2",
+          "status": "planned",
+          "evidence": [
+            "evidence/P1-W2-group-recovery-checkpoint.md",
+            "evidence/P1-W2-recovery-diagnosis-checkpoint.md",
+            "evidence/P1-build72-checkpoint.md"
+          ]
+        },
+        {
+          "id": "C1",
+          "status": "planned",
+          "evidence": [
+            "evidence/P1-C1-outcome-checkpoint.md",
+            "evidence/P1-C1-short-caption-checkpoint.md",
+            "evidence/P1-build71-checkpoint.md",
+            "evidence/P1-build72-checkpoint.md"
+          ]
+        },
+        {
+          "id": "Q1",
+          "status": "planned",
+          "evidence": [
+            "evidence/P1-Q1-identity-journal-checkpoint.md",
+            "evidence/P1-build72-checkpoint.md"
+          ]
+        },
+        {
+          "id": "H1",
+          "status": "planned",
+          "evidence": [
+            "evidence/P1-H1-health-panel-checkpoint.md"
+          ]
+        }
+      ],
+      "latest_checkpoint": "Build79/0.10.66 confirmed on both phones; immediate and settled service checks pass.60 boundary/policy/search tests and17 catalogue tests passed. Initial79 TPS sample has no fresh publish opportunity; timezone, community and POS blockers recur. No live gate closed."
+    },
+    {
+      "id": "P2",
+      "title": "YouTube variants and cadence",
+      "depends_on": [
+        "P1"
+      ],
+      "status": "planned",
+      "evidence": [
+        "evidence/P2-queue-migration-checkpoint.md",
+        "evidence/P2-cadence-checkpoint.md",
+        "evidence/P2-youtube-app-notices-20260925.md",
+        "evidence/P1-build77-hours-review.md",
+        "evidence/P1-headlines-platform-review-20260925.md"
+      ],
+      "checks": {
+        "implementation": false,
+        "tests": false,
+        "deployment": false,
+        "live": false
+      },
+      "blocker": null
+    },
+    {
+      "id": "P3",
+      "title": "Backend binding and API repair",
+      "depends_on": [
+        "P2"
+      ],
+      "status": "planned",
+      "evidence": [
+        "evidence/P3-heartbeat-read-checkpoint.md",
+        "evidence/P0-config-correlation-checkpoint.md",
+        "evidence/P3-shop-switch-checkpoint.md",
+        "evidence/P3-binding-history-checkpoint.md",
+        "evidence/P1-shop-nightly-business-20260925.md"
+      ],
+      "checks": {
+        "implementation": false,
+        "tests": false,
+        "deployment": false,
+        "live": false
+      },
+      "blocker": null
+    },
+    {
+      "id": "P4",
+      "title": "Durable telemetry and availability",
+      "depends_on": [
+        "P3"
+      ],
+      "status": "planned",
+      "evidence": [
+        "evidence/P4-heartbeat-producer-checkpoint.md",
+        "evidence/P4-availability-checkpoint.md",
+        "evidence/P4-event-sync-checkpoint.md",
+        "evidence/P4-reply-attribution-checkpoint.md",
+        "evidence/P4-outcome-taxonomy-checkpoint.md",
+        "evidence/P1-build72-checkpoint.md",
+        "evidence/P4-build73-attribution-checkpoint.md",
+        "evidence/P1-headlines-platform-review-20260925.md"
+      ],
+      "checks": {
+        "implementation": false,
+        "tests": false,
+        "deployment": false,
+        "live": false
+      },
+      "blocker": null
+    },
+    {
+      "id": "P5",
+      "title": "Fleet map and drill-down",
+      "depends_on": [
+        "P4"
+      ],
+      "status": "planned",
+      "evidence": [
+        "evidence/P5-fleet-page-checkpoint.md"
+      ],
+      "checks": {
+        "implementation": false,
+        "tests": false,
+        "deployment": false,
+        "live": false
+      },
+      "blocker": null
+    },
+    {
+      "id": "P6",
+      "title": "Shared account and QR pairing",
+      "depends_on": [
+        "P5"
+      ],
+      "status": "planned",
+      "evidence": [],
+      "checks": {
+        "implementation": false,
+        "tests": false,
+        "deployment": false,
+        "live": false
+      },
+      "blocker": null
+    },
+    {
+      "id": "P7",
+      "title": "Sanaa Chat remote commands",
+      "depends_on": [
+        "P6"
+      ],
+      "status": "planned",
+      "evidence": [],
+      "checks": {
+        "implementation": false,
+        "tests": false,
+        "deployment": false,
+        "live": false
+      },
+      "blocker": null
+    },
+    {
+      "id": "P8",
+      "title": "Cross-device learning and rollout",
+      "depends_on": [
+        "P7"
+      ],
+      "status": "planned",
+      "evidence": [],
+      "checks": {
+        "implementation": false,
+        "tests": false,
+        "deployment": false,
+        "live": false
+      },
+      "blocker": null
+    }
+  ],
+  "issue_register": "issue-register.json",
+  "pre_livestream_gate": {
+    "status": "pending",
+    "required_reports": [
+      "evidence/FINAL_RELEASE_REPORT.md",
+      "evidence/FINAL_ACCEPTANCE_MATRIX.md",
+      "evidence/FINAL_SOAK_REPORT.md",
+      "evidence/FINAL_BACKEND_RECOVERY.md"
+    ]
+  }
+}

@@ -5,6 +5,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WhatsAppNotificationParserTest {
+    @Test fun customerQuestionMentioningAMissedCallIsStillAQuestion() {
+        listOf("I missed your call, is the printer available?", "Please check my missed call", "Missed call about the delivery")
+            .forEach { assertFalse(it, WhatsAppNotificationParser.isMissedCallEvent(it)) }
+        listOf("Missed voice call", "Missed video call", "Missed call", "2 missed calls")
+            .forEach { assertTrue(it, WhatsAppNotificationParser.isMissedCallEvent(it)) }
+        assertFalse(WhatsAppNotificationParser.parseAccessibility("Customer: Missed call about the delivery")!!.isMissedCall)
+    }
     @Test fun notificationCountsDoNotChangeGroupIdentity() {
         org.junit.Assert.assertEquals("Naalya E-Trade", WhatsAppNotificationParser.cleanConversationTitle("Naalya E-Trade (7 messages)"))
         org.junit.Assert.assertEquals("Club (2026)", WhatsAppNotificationParser.cleanConversationTitle("Club (2026)"))

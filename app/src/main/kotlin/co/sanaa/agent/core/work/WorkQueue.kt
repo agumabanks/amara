@@ -44,6 +44,32 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
 
+    /** Remove old-shop promotions from runnable work without deleting dispatch evidence. */
+    @Synchronized
+    fun quarantineOtherShopAds(scope: String): Int {
+        require(scope.isNotBlank())
+        val db = writableDatabase
+        var count = 0
+        db.beginTransaction()
+        try {
+            val rows = db.rawQuery("SELECT dedupe_key,payload FROM work_items WHERE status='PENDING' AND kind IN ('WA_BROADCAST','TIKTOK_POST_PUBLISH','TIKTOK_STORY_PUBLISH','YOUTUBE_SHORT_PUBLISH')", null).use { c ->
+                buildList { while(c.moveToNext()) add(c.getString(0) to c.getString(1)) }
+            }
+            for ((key, raw) in rows) {
+                val payload = org.json.JSONObject(raw)
+                val old = payload.optString("shop_scope")
+                if (old.isBlank() || old == scope) continue
+                payload.put("review_reason", "Shop changed; old-shop promotion quarantined. Inspect any existing receipt before reuse.")
+                    .put("quarantined_for_scope", scope).put("review_at", System.currentTimeMillis())
+                db.execSQL("UPDATE work_items SET status='NEEDS_REVIEW',payload=? WHERE dedupe_key=? AND status='PENDING'", arrayOf(payload.toString(),key))
+                count++
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        if (count > 0) evaluation.record("shop_ads_quarantined", fields = org.json.JSONObject().put("count",count).put("active_scope",scope))
+        return count
+    }
+
     /**
      * Add a work item to the queue.
      * Returns: DEDUPED if already exists (value refreshed), ACCEPTED if new, REJECTED_CAP if domain full.
@@ -72,10 +98,6 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
         val alreadyKnown = db.rawQuery("SELECT 1 FROM work_items WHERE dedupe_key = ?", arrayOf(item.dedupeKey))
             .use { it.moveToFirst() }
         if (alreadyKnown) return OfferResult.DEDUPED
-        if (hasNewerInbound(item)) {
-            evaluation.record("stale_inbound_ignored", item.dedupeKey)
-            return OfferResult.DEDUPED
-        }
         evaluation.record("offered", item.dedupeKey, org.json.JSONObject().put("kind", item.kind.name)
             .put("observed_at", item.payload.optLong("inbound_observed_at"))
             .put("eligible_at", item.payload.optLong("owner_takeover_at")))
@@ -85,7 +107,8 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
         // for these kinds so an idle/owner-active phone cannot later burst-post or
         // spend hours executing stale observations.
         if (item.kind in setOf(WorkKind.TIKTOK_COMMENT_REPLY, WorkKind.MARKET_ANALYSIS)) {
-            fun family(payload: org.json.JSONObject): String? = when(item.kind) {
+            fun family(payload: org.json.JSONObject): String? = if (payload.optBoolean("owner_command") ||
+                payload.optBoolean("owner_canary")) null else when(item.kind) {
                 WorkKind.TIKTOK_COMMENT_REPLY -> if(payload.optString("notification_id").isNotBlank() || payload.optString("community_post").isNotBlank()) null else "routine"
                 else -> if(payload.optBoolean("manager_orders")) "manager_orders" else "market_review"
             }
@@ -98,14 +121,23 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
                 ids.forEach { db.delete("work_items","id=?",arrayOf(it.toString())) }
             }
         } else if (item.kind in SINGLE_PENDING_KINDS) {
-            db.delete(
-                "work_items",
-                "status = 'PENDING' AND kind = ? AND dedupe_key != ?",
+            // Periodic buckets may replace only untouched periodic work. Owner
+            // requests and prepared/retried posts retain their exact receipt key.
+            val disposable = db.rawQuery(
+                "SELECT id,payload,attempt FROM work_items WHERE status='PENDING' AND kind=? AND dedupe_key!=?",
                 arrayOf(item.kind.name, item.dedupeKey),
-            )
-        } else if (item.kind == WorkKind.WA_REPLY_INBOUND) {
-            compactPendingConversation(db, item)
+            ).use { rows -> buildList {
+                while (rows.moveToNext()) {
+                    val payload = org.json.JSONObject(rows.getString(1))
+                    if (!payload.optBoolean("owner_command") && !payload.optBoolean("owner_canary") &&
+                        payload.optString("listing_id").isBlank() && rows.getInt(2) == 0) add(rows.getLong(0))
+                }
+            } }
+            disposable.forEach { db.delete("work_items", "id=?", arrayOf(it.toString())) }
         }
+        // Distinct inbound messages are distinct obligations. A later question or
+        // manager instruction is not evidence that an earlier one was answered.
+        // Exact notification replays are handled by the durable key above.
 
         // Check for existing
         val existing = db.rawQuery("SELECT id, status FROM work_items WHERE dedupe_key = ?", arrayOf(item.dedupeKey))
@@ -176,6 +208,28 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
             writableDatabase.execSQL("UPDATE work_items SET payload=? WHERE dedupe_key=? AND status='PENDING'", arrayOf(payload, key))
         }
         return updates.size
+    }
+
+    /** Release only owner-requested TikTok work delayed by a repaired breaker. */
+    @Synchronized
+    fun releaseOwnerTikTokDeferrals(now: Long = System.currentTimeMillis()): List<String> {
+        val keys = mutableListOf<String>()
+        readableDatabase.rawQuery(
+            "SELECT dedupe_key,payload FROM work_items WHERE status='PENDING' AND not_before>? AND kind IN ('TIKTOK_POST_PUBLISH','TIKTOK_COMMENT_REPLY')",
+            arrayOf(now.toString()),
+        ).use { rows ->
+            while (rows.moveToNext()) {
+                val payload = runCatching { org.json.JSONObject(rows.getString(1)) }.getOrNull() ?: continue
+                if (payload.optBoolean("owner_command", false)) keys += rows.getString(0)
+            }
+        }
+        keys.forEach { key ->
+            writableDatabase.execSQL(
+                "UPDATE work_items SET not_before=? WHERE dedupe_key=? AND status='PENDING'",
+                arrayOf(now.toString(), key),
+            )
+        }
+        return keys
     }
 
     data class MediaCleanupReference(val key: String, val kind: String, val status: String, val payload: String)
@@ -298,7 +352,15 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
         // A waiting person outranks scheduled promotion/research, even after failures
         // have lowered this kind's learned success rate. Finish the current action first.
         val replies = items.filter { it.kind == WorkKind.WA_REPLY_INBOUND && !it.payload.optBoolean("manager_report") }
-        if (replies.isNotEmpty()) return replies.minByOrNull { it.createdAt }
+        if (replies.isNotEmpty()) {
+            val first = replies.minByOrNull { it.createdAt }!!
+            val origin = first.payload.optString("conversation_identity")
+            // Notification callbacks can arrive out of order. Keep fairness
+            // between chats, but execute that chat's oldest observed message first.
+            return if (origin.isBlank()) first else replies.filter {
+                it.payload.optString("conversation_identity") == origin
+            }.minByOrNull { it.payload.optLong("inbound_message_at").takeIf { at -> at > 0 } ?: it.createdAt }
+        }
         // Due publication precedes optional engagement/research. Inbound still wins above.
         items.filter { it.kind == WorkKind.TIKTOK_POST_PUBLISH }.minByOrNull { it.createdAt }?.let { return it }
         items.filter { it.kind == WorkKind.WA_FOLLOWUP }.minByOrNull { it.createdAt }?.let { return it }
@@ -382,6 +444,41 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
         writableDatabase.execSQL("UPDATE work_items SET status='NEEDS_REVIEW',payload=?,in_flight_until=NULL WHERE dedupe_key=?",
             arrayOf(payload.toString(),item.dedupeKey))
         evaluation.record("needs_review",item.dedupeKey,org.json.JSONObject().put("kind",item.kind.name))
+    }
+
+    /** One bounded recovery for recent explicit drafts that never reached a send transaction. */
+    @Synchronized
+    fun recoverUnsentWhatsApp(hasReceipt: (String) -> Boolean, now: Long = System.currentTimeMillis()): Int {
+        // Reserve admission room for new notifications and manager updates. Recovery
+        // bypasses offer(), so it must enforce its own bound before changing status.
+        val pending = readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM work_items WHERE domain='WHATSAPP' AND status IN ('PENDING','IN_FLIGHT')", null,
+        ).use { it.moveToFirst(); it.getInt(0) }
+        val available = (20 - pending).coerceIn(0, 3)
+        if (available == 0) return 0
+        val recover = mutableListOf<Pair<String, org.json.JSONObject>>()
+        readableDatabase.rawQuery(
+            "SELECT dedupe_key,payload,created_at FROM work_items WHERE status='NEEDS_REVIEW' AND kind='WA_REPLY_INBOUND' AND created_at>=? ORDER BY created_at LIMIT 100",
+            arrayOf((now - 86_400_000L).toString()),
+        ).use { c ->
+            while (c.moveToNext() && recover.size < available) {
+                val key=c.getString(0); val payload=org.json.JSONObject(c.getString(1))
+                if (payload.optBoolean("inbound") || payload.optBoolean("navigation_recovery_attempted") ||
+                    !payload.optString("review_reason").startsWith("Exact queued reply destination unavailable:")) continue
+                val target=payload.optString("target"); val message=payload.optString("message")
+                if (target.isBlank() || message.isBlank()) continue
+                val receiptKey=if(payload.optBoolean("manager_report")) key else "wa-reply:${target}:${message.hashCode()}"
+                if (hasReceipt(receiptKey)) continue
+                recover += key to payload
+            }
+        }
+        recover.forEach { (key,payload) ->
+            payload.put("navigation_recovery_attempted",true).remove("review_reason")
+            writableDatabase.execSQL("UPDATE work_items SET status='PENDING',payload=?,not_before=?,attempt=0,in_flight_until=NULL WHERE dedupe_key=? AND status='NEEDS_REVIEW'",
+                arrayOf(payload.toString(),now,key))
+            evaluation.record("unsent_navigation_recovery",key,org.json.JSONObject().put("delivery_verified",false))
+        }
+        return recover.size
     }
 
     /** Owner disposition only: never sends, retries or claims that delivery was verified. */
@@ -487,25 +584,15 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
         "DELETE FROM work_items WHERE status = 'PENDING' AND payload LIKE '%\"owner_canary\":true%'",
     ).executeUpdateDelete()
 
-    /** Remove historical periodic buckets and superseded inbound messages while
-     * preserving the newest actionable item. This also repairs queues created by
-     * older builds before offer-time coalescing existed. */
+    /** Hold malformed legacy inbound routes for review. Distinct questions,
+     * manager instructions, outbound drafts and delivery evidence remain intact. */
     @Synchronized
     fun compactPendingBacklog(): Int {
         val db = writableDatabase
         var removed = 0
-        SINGLE_PENDING_KINDS.forEach { kind ->
-            val statement = db.compileStatement(
-                "DELETE FROM work_items WHERE status = 'PENDING' AND kind = ? AND id != " +
-                    "(SELECT MAX(id) FROM work_items WHERE status = 'PENDING' AND kind = ?)",
-            )
-            statement.bindString(1, kind.name)
-            statement.bindString(2, kind.name)
-            removed += statement.executeUpdateDelete()
-        }
-
-        val newestByConversation = linkedMapOf<String, Long>()
-        val superseded = mutableListOf<Long>()
+        // Admission already coalesces eligible routine work. Maintenance must not
+        // delete pending publications, consultations or distinct customer questions.
+        val invalid = mutableListOf<Pair<Long, org.json.JSONObject>>()
         db.rawQuery(
             "SELECT id, payload FROM work_items WHERE status = 'PENDING' AND kind = ? ORDER BY id DESC",
             arrayOf(WorkKind.WA_REPLY_INBOUND.name),
@@ -513,24 +600,27 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(0)
                 val payload = runCatching { org.json.JSONObject(cursor.getString(1)) }.getOrNull()
-                // Manager reports have an exact target, not a customer conversation.
-                if (payload?.optBoolean("manager_report", false) == true) continue
-                if (payload?.optBoolean("is_missed_call", false) == true) continue
-                val conversation = payload?.optString("conversation_identity").orEmpty()
+                if (payload?.optBoolean("manager_report", false) == true ||
+                    payload?.optBoolean("is_missed_call", false) == true) continue
+                // Outbound reply jobs have an exact target, not an inbound
+                // conversation field. Preserve valid queued drafts during cleanup.
+                if (payload != null && !payload.optBoolean("inbound") &&
+                    payload.optString("target").isNotBlank() && payload.optString("message").isNotBlank()) continue
                 val message = payload?.optString("message")?.trim().orEmpty()
-                if (payload?.optString("conversation").orEmpty().isBlank() ||
+                if (payload == null || payload.optString("conversation").isBlank() ||
                     message.startsWith("Sending ", ignoreCase = true) ||
-                    (!(payload?.optBoolean("is_missed_call", false) ?: false) &&
-                        co.sanaa.agent.modules.WhatsAppNotificationParser.isNonConversationalEvent(message))) {
-                    superseded += id
-                    continue
-                }
-                if (conversation.isNotBlank() && newestByConversation.putIfAbsent(conversation, id) != null) {
-                    superseded += id
+                    co.sanaa.agent.modules.WhatsAppNotificationParser.isNonConversationalEvent(message)) {
+                    invalid += id to (payload ?: org.json.JSONObject())
                 }
             }
         }
-        superseded.forEach { id -> removed += db.delete("work_items", "id = ?", arrayOf(id.toString())) }
+        invalid.forEach { (id, payload) ->
+            payload.put("review_reason", "Maintenance held an invalid legacy inbound route; no reply or deletion performed")
+            db.execSQL("UPDATE work_items SET status='NEEDS_REVIEW',payload=? WHERE id=? AND status='PENDING'",
+                arrayOf(payload.toString(),id))
+            removed++
+        }
+        if (removed > 0) evaluation.record("maintenance_invalid_routes_held", fields=org.json.JSONObject().put("count",removed))
         return removed
     }
 
@@ -553,41 +643,6 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
                 add(WorkBlockers.scope(item))
             }
         }
-    }
-
-    private fun hasNewerInbound(item: WorkItem): Boolean {
-        if (item.kind != WorkKind.WA_REPLY_INBOUND || !item.payload.optBoolean("inbound") || item.payload.optBoolean("is_missed_call")) return false
-        val identity = item.payload.optString("conversation_identity")
-        val messageAt = item.payload.optLong("inbound_message_at")
-        if (identity.isBlank() || messageAt <= 0L) return false
-        return readableDatabase.rawQuery("SELECT payload FROM work_items WHERE kind=?", arrayOf(item.kind.name)).use { cursor ->
-            var newer = false
-            while (cursor.moveToNext()) {
-                val other = runCatching { org.json.JSONObject(cursor.getString(0)) }.getOrNull() ?: continue
-                if (other.optBoolean("inbound") && !other.optBoolean("is_missed_call") &&
-                    other.optString("conversation_identity") == identity && other.optLong("inbound_message_at") > messageAt) newer = true
-            }
-            newer
-        }
-    }
-
-    private fun compactPendingConversation(db: SQLiteDatabase, item: WorkItem) {
-        val conversation = item.payload.optString("conversation_identity").trim()
-        if (conversation.isBlank() || item.payload.optBoolean("is_missed_call")) return
-        val ids = mutableListOf<Long>()
-        db.rawQuery(
-            "SELECT id, payload, dedupe_key FROM work_items WHERE status = 'PENDING' AND kind = ? AND dedupe_key != ?",
-            arrayOf(WorkKind.WA_REPLY_INBOUND.name, item.dedupeKey),
-        ).use { cursor ->
-            while (cursor.moveToNext()) {
-                val other = runCatching { org.json.JSONObject(cursor.getString(1)) }.getOrNull() ?: continue
-                if (other.optString("conversation_identity") == conversation && !other.optBoolean("is_missed_call")) {
-                    ids += cursor.getLong(0)
-                    evaluation.record("superseded", cursor.getString(2), org.json.JSONObject().put("replacement", co.sanaa.agent.core.ContentHashing.hash(item.dedupeKey)))
-                }
-            }
-        }
-        ids.forEach { id -> db.delete("work_items", "id = ?", arrayOf(id.toString())) }
     }
 
     /**
@@ -652,6 +707,12 @@ class WorkQueue(private val context: Context) : SQLiteOpenHelper(context, "amara
     }
 
     companion object {
+        internal fun isDefinitelyPreDispatchWhatsAppReview(reason: String): Boolean =
+            reason.startsWith("Originating WhatsApp conversation could not be verified:") ||
+                reason.startsWith("Could not open and verify the exact WhatsApp chat:") ||
+                reason.startsWith("Terminal session recovery could not open the installed app;") ||
+                reason.startsWith("Terminal session still unavailable after reopening;")
+
         private val SINGLE_PENDING_KINDS = setOf(
             WorkKind.SOKO_AUDIT,
             WorkKind.SOKO_INVENTORY_CHECK,

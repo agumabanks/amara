@@ -21,7 +21,7 @@ class SokoTerminalBridge(private val context: Context) {
         }.getOrElse { base + ("state" to "terminal_update_needed") }
     }
     fun shopStatus(): Map<String, Any> = runCatching {
-        val shop=TerminalShopIdentity.read(context)
+        val shop=TerminalShopIdentity.readFresh(context)
         mapOf<String,Any>("verified" to true, "shopName" to shop.name, "scope" to shop.scope, "expiresAt" to shop.expiresAt)
     }.getOrElse { mapOf("verified" to false,"reason" to (it.message ?: "Open Terminal to verify its logged-in shop")) }
     companion object { const val PACKAGE = "com.soko24.soko_seller_terminal" }

@@ -98,7 +98,8 @@ data class BrainFailureRecord(
 )
 
 /** Private, device-only memory stored at databases/amara_memory.db. */
-class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 21) {
+class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, 22) {
+    private val appContext = context
     private val ownerPower = OwnerPower(context)
     fun ownerAllowsWork(): Boolean = ownerPower.isOn()
     override fun onConfigure(db: SQLiteDatabase) {
@@ -143,9 +144,11 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
                 description TEXT,
                 listing_quality_score REAL,
                 last_seen_timestamp INTEGER NOT NULL,
-                improvements_made TEXT
+                improvements_made TEXT,
+                shop_scope TEXT
             )""".trimIndent(),
         )
+        db.execSQL("CREATE INDEX idx_products_seen_shop_seen ON products_seen(shop_scope, last_seen_timestamp DESC)")
         db.execSQL(
             """CREATE TABLE owner_instructions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,6 +163,7 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         createLearningTable(db)
         createTaskJournalTables(db)
         createOperationalTables(db)
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_business_findings_shop_status ON business_findings(shop_scope, status, created_at DESC)")
         createTransactionTables(db)
         createWorkflowAndArtifactTables(db)
         createBudgetTables(db)
@@ -197,6 +201,25 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         if (oldVersion < 13) createFailureTables(db)
         if (oldVersion < 14) upgradeBrainFailuresToV14(db)
         if (oldVersion < 15) createRevenueObservationTables(db)
+        if (oldVersion < 22) {
+            // Legacy observations cannot be attributed to a signed shop after the fact.
+            val hasProducts = db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='products_seen'", null)
+                .use { it.moveToFirst() }
+            if (hasProducts) {
+                val scoped = db.rawQuery("PRAGMA table_info(products_seen)", null)
+                    .use { c -> (0 until c.count).any { c.moveToPosition(it) && c.getString(1) == "shop_scope" } }
+                if (!scoped) db.execSQL("ALTER TABLE products_seen ADD COLUMN shop_scope TEXT")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_products_seen_shop_seen ON products_seen(shop_scope, last_seen_timestamp DESC)")
+            }
+            val hasFindings = db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_findings'", null)
+                .use { it.moveToFirst() }
+            if (hasFindings) {
+                val scoped = db.rawQuery("PRAGMA table_info(business_findings)", null)
+                    .use { c -> (0 until c.count).any { c.moveToPosition(it) && c.getString(1) == "shop_scope" } }
+                if (!scoped) db.execSQL("ALTER TABLE business_findings ADD COLUMN shop_scope TEXT")
+                db.execSQL("CREATE INDEX IF NOT EXISTS idx_business_findings_shop_status ON business_findings(shop_scope, status, created_at DESC)")
+            }
+        }
     }
 
     /**
@@ -552,7 +575,8 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
                 confidence REAL NOT NULL,
                 evidence TEXT NOT NULL,
                 recommendation TEXT NOT NULL,
-                status TEXT NOT NULL CHECK(status IN ('open','proposed','approved','fixed','dismissed'))
+                status TEXT NOT NULL CHECK(status IN ('open','proposed','approved','fixed','dismissed')),
+                shop_scope TEXT
             )""".trimIndent(),
         )
         db.execSQL(
@@ -1460,14 +1484,20 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
     /** Crash recovery: a process death during acting/verification leaves the effect uncertain. */
     @Synchronized
     fun markOrphanedTransactionsUncertain() {
+        val now = System.currentTimeMillis()
         writableDatabase.execSQL(
             """UPDATE side_effect_transactions
                SET state = 'UNCERTAIN',
                    updated_at = ?,
                    evidence = CASE WHEN evidence = '' THEN 'Process died before the result could be proven.' ELSE evidence END
                WHERE state IN ('CLAIMED','ACTING','VERIFICATION_PENDING')""".trimIndent(),
-            arrayOf(System.currentTimeMillis()),
+            arrayOf(now),
         )
+        // Receipt projection follows the canonical ledger: interrupted persistence
+        // and restart cannot leave a receipt claiming a verified/failed dispatch.
+        runCatching {
+            ModuleActivityStore(appContext).use { it.recordOrphansUncertain(allSideEffectTransactions()) }
+        }
     }
 
     @Synchronized
@@ -1744,10 +1774,13 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         evidence: String,
         recommendation: String,
     ): Long {
+        val scope = currentVerifiedShopScope()
+        val scopeClause = if (scope == null) "shop_scope IS NULL" else "shop_scope = ?"
         val existing = readableDatabase.query(
             "business_findings", arrayOf("id"),
-            "source_app = ? AND subject = ? AND issue = ? AND status IN ('open','proposed','approved')",
-            arrayOf(sourceApp, subject, issue), null, null, "created_at DESC", "1",
+            "source_app = ? AND subject = ? AND issue = ? AND $scopeClause AND status IN ('open','proposed','approved')",
+            if (scope == null) arrayOf(sourceApp, subject, issue) else arrayOf(sourceApp, subject, issue, scope),
+            null, null, "created_at DESC", "1",
         ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else null }
         if (existing != null) return existing
         return writableDatabase.insertOrThrow("business_findings", null, ContentValues().apply {
@@ -1760,13 +1793,15 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         put("evidence", evidence.take(4_000))
         put("recommendation", recommendation.take(2_000))
         put("status", "open")
+        put("shop_scope", scope)
         })
     }
 
     @Synchronized
     fun openBusinessFindings(limit: Int = 50): List<BusinessFindingRecord> = readableDatabase.query(
         "business_findings", arrayOf("id", "source_app", "subject", "issue", "severity", "confidence", "evidence", "recommendation", "status"),
-        "status IN ('open','proposed','approved')", null, null, null, "created_at DESC", limit.coerceIn(1, 200).toString(),
+        "status IN ('open','proposed','approved') AND shop_scope = ?",
+        arrayOf(currentVerifiedShopScope() ?: ""), null, null, "created_at DESC", limit.coerceIn(1, 200).toString(),
     ).use { cursor ->
         buildList {
             while (cursor.moveToNext()) add(BusinessFindingRecord(
@@ -2019,6 +2054,7 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
     @Synchronized
     fun recordProductSeen(sourceApp: String, name: String, priceUgx: Long?, description: String, qualityScore: Double? = null): Long =
         writableDatabase.insertOrThrow("products_seen", null, ContentValues().apply {
+            put("shop_scope", currentVerifiedShopScope())
             put("source_app", sourceApp)
             put("product_name", name)
             if (priceUgx == null) putNull("price_ugx") else put("price_ugx", priceUgx)
@@ -2093,10 +2129,12 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
     /** A small, bounded memory window safe to place in the model system prompt. */
     @Synchronized
     fun promptContext(): String {
+        val shopScope = currentVerifiedShopScope()
+        if (shopScope == null) return "No fresh signed Terminal shop is available; cached product facts are withheld."
         val products = readableDatabase.rawQuery(
             """SELECT product_name, price_ugx, description FROM products_seen p
-               WHERE last_seen_timestamp = (SELECT MAX(last_seen_timestamp) FROM products_seen WHERE product_name = p.product_name)
-               ORDER BY last_seen_timestamp DESC LIMIT 30""".trimIndent(), null,
+               WHERE shop_scope = ? AND last_seen_timestamp = (SELECT MAX(last_seen_timestamp) FROM products_seen WHERE shop_scope = ? AND product_name = p.product_name)
+               ORDER BY last_seen_timestamp DESC LIMIT 30""".trimIndent(), arrayOf(shopScope, shopScope),
         ).use { cursor ->
             buildList {
                 while (cursor.moveToNext()) {
@@ -2107,7 +2145,7 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
         }
         return """
             Products learned from the phone:
-            ${products.ifEmpty { listOf("- No products learned yet") }.joinToString("\n")}
+            ${products.ifEmpty { listOf("- No verified products remembered for this shop; inspect Terminal before claiming inventory") }.joinToString("\n")}
         """.trimIndent()
     }
 
@@ -2116,9 +2154,13 @@ class AmaraMemory(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, n
     @Synchronized
     fun recentProductNames(limit: Int = 40): List<String> = readableDatabase.rawQuery(
         """SELECT DISTINCT product_name FROM products_seen
-           ORDER BY last_seen_timestamp DESC LIMIT ?""".trimIndent(),
-        arrayOf(limit.coerceIn(1, 100).toString()),
+           WHERE shop_scope = ? ORDER BY last_seen_timestamp DESC LIMIT ?""".trimIndent(),
+        arrayOf(currentVerifiedShopScope() ?: "", limit.coerceIn(1, 100).toString()),
     ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+
+    fun currentVerifiedShopName(): String? = runCatching { TerminalShopIdentity.read(appContext).name }.getOrNull()
+
+    private fun currentVerifiedShopScope(): String? = runCatching { TerminalShopIdentity.read(appContext).scope }.getOrNull()
 
     @Synchronized
     fun conversationHistory(contact: String, limit: Int = 30): List<MemoryChatMessage> {

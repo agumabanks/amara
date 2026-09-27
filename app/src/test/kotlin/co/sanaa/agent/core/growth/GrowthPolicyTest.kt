@@ -7,6 +7,29 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class GrowthPolicyTest {
+    @Test(timeout = 5000) fun largeCatalogueSelectionDoesNotGenerateEveryCreative() {
+        val longDescription = "Catalogue detail ".repeat(1000)
+        val choices = (1..5000).map { listing(it.toString()).copy(description=longDescription) }
+        val history = (1..4999).map { GrowthStore.Promotion(it.toString(), "PRODUCT") }
+        assertEquals("5000", GrowthStore.select(choices, history) { 0 }!!.id)
+    }
+    @Test fun coversEveryOfferingBeyondTwoHundredBeforeRepeating() {
+        val choices = (1..251).map { listing(it.toString(), it % 3 == 0) }
+        val history = mutableListOf<GrowthStore.Promotion>()
+        repeat(choices.size) {
+            val chosen = GrowthStore.select(choices, history) { 0 }!!
+            assertFalse(history.any { it.listingId == chosen.id })
+            history.add(0, GrowthStore.Promotion(chosen.id, GrowthStore.typeOf(chosen)))
+        }
+        assertEquals(251, history.map { it.listingId }.toSet().size)
+        assertEquals(history.last().listingId, GrowthStore.select(choices, history) { 0 }!!.id)
+        assertNotNull(GrowthStore.select(listOf(listing("text-only").copy(imageUrl = null)), emptyList(), requireMedia = false))
+    }
+    @Test fun marketEvidenceRanksWithoutPriorCustomerInquiriesButPreservesCoverage() {
+        val choices = listOf(listing("trend"), listing("unseen"))
+        assertEquals("trend", GrowthStore.select(choices, emptyList(), trendingListingIds = setOf("trend")) { 1 }!!.id)
+        assertEquals("unseen", GrowthStore.select(choices, listOf(GrowthStore.Promotion("trend", "PRODUCT")), trendingListingIds = setOf("trend")) { 1 }!!.id)
+    }
     private fun listing(id: String, service: Boolean = false) = SokoListing(id, "Office chair", "Blue fabric", 120000, "Furniture", 1, 0, 2,
         "https://soko24.co/uploads/chair.jpg", JSONObject().put("slug", "office-chair-$id").put("offering_type", if (service) "SERVICE" else "PRODUCT"))
     @Test fun evidencedDemandWinsWithinRotationWhenNotExploring() {

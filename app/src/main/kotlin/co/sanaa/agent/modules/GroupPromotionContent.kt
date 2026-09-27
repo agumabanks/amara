@@ -7,7 +7,7 @@ import co.sanaa.agent.core.growth.MarketGrowthReview
 data class GroupPromotionContent(val caption: String, val imageUrl: String) {
     companion object {
         fun from(listing: SokoListing, detailed: Boolean = false, variant: Int = 0): GroupPromotionContent? {
-            val base = TikTokProductContent.from(listing) ?: return null
+            val shoppingUrl = TikTokProductContent.shoppingUrl(listing) ?: return null
             val service = listing.raw.optString("offering_type") == "SERVICE"
             val plain = MarketGrowthReview.plainText(listing.description).replace(Regex("\\s+"), " ").trim()
             // One concrete fact, never a pasted catalogue paragraph. Longer copy is opt-in.
@@ -20,11 +20,11 @@ data class GroupPromotionContent(val caption: String, val imageUrl: String) {
                 appendLine(listing.title.take(80))
                 appendLine(AmaraAdSpec.price(listing))
                 if (fact.isNotBlank()) appendLine(fact)
-                appendLine(base.shoppingUrl)
+                appendLine(shoppingUrl)
                 append(angle.question)
                 if (!service) append(" Message us to confirm availability.")
             }
-            return GroupPromotionContent(caption, base.imageUrl)
+            return GroupPromotionContent(caption, listing.imageUrl!!.trim())
         }
     }
 }

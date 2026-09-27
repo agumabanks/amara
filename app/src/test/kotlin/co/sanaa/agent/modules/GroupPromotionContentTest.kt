@@ -32,6 +32,13 @@ class GroupPromotionContentTest {
         assertNotEquals(brief.caption, GroupPromotionContent.from(listing, variant = 1)!!.caption)
         assertEquals(brief.imageUrl, detail.imageUrl)
     }
+    @Test fun captionDoesNotRequireArtworkHeadlineBeforePlannerRuns() {
+        val listing = item().copy(title = "Acme Premium Solid Oak Dining Table")
+        val post = GroupPromotionContent.from(listing)!!
+        assertTrue(post.caption.contains(listing.title))
+        assertEquals(listing.imageUrl, post.imageUrl)
+        assertTrue(post.caption.contains("/product/office-chair"))
+    }
     @Test fun missingMediaNeverCreatesTextOnlyPromotion() {
         assertNull(GroupPromotionContent.from(item().copy(imageUrl = null)))
     }

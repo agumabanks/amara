@@ -41,7 +41,6 @@ class AmaraMotionScene(private val ad: AmaraAdSpec, private val photos: List<Bit
         val bg=if(dark) INK else PAPER;val fg=if(dark) PAPER else INK
         c.drawColor(bg)
         if(seconds>=CLOSE_AT) { closing(c,seconds-CLOSE_AT);return }
-        val enter=ease(seconds/.65f)
         p.color=GREEN;p.alpha=35
         when(ad.background) {
             1 -> { c.drawCircle(40f,570f,310f+sin(seconds)*16f,p);c.drawCircle(640f,100f,160f,p) }
@@ -49,9 +48,9 @@ class AmaraMotionScene(private val ad: AmaraAdSpec, private val photos: List<Bit
             else -> c.drawCircle(650f,150f,220f+sin(seconds)*12f,p)
         };p.alpha=255
         text(c,ad.brand.uppercase(),54f,150f,21f,530f,if(dark) GREEN else INK)
-        text(c,ad.headline,54f,238f+(1-enter)*24f,64f,540f,fg,true,(enter*255).toInt())
+        headline(c, ad.headline, fg, 255)
         // The image moves gently within its own card; product edges are never cropped.
-        val card=if(ad.template=="poster") RectF(54f,310f,598f,778f) else RectF(54f,290f,598f,805f)
+        val card=if(ad.template=="poster") RectF(54f,328f,598f,778f) else RectF(54f,320f,598f,805f)
         val index=galleryIndex(seconds,photos.size)
         val segment=CLOSE_AT/photos.size
         val phase=(seconds-index*segment).coerceAtLeast(0f)
@@ -86,6 +85,24 @@ class AmaraMotionScene(private val ad: AmaraAdSpec, private val photos: List<Bit
         text(c,"Full details & item link in caption",54f,1110f,21f,540f,fg)
         // Quiet progress accent, not a flashing banner.
         panel(c,RectF(54f,1144f,54f+544f*(seconds/CLOSE_AT),1148f),GREEN,2f)
+    }
+    private fun headline(c: Canvas, value: String, color: Int, alpha: Int) {
+        val paint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            this.color=color; this.alpha=alpha
+            typeface=if(android.os.Build.VERSION.SDK_INT>=28) Typeface.create(Typeface.SANS_SERIF,900,false)
+                else Typeface.create("sans-serif-black",Typeface.NORMAL)
+        }
+        fun layout(size: Float): android.text.StaticLayout {
+            paint.textSize=size
+            return android.text.StaticLayout.Builder.obtain(value,0,value.length,paint,544)
+                .setIncludePad(false).setBreakStrategy(android.text.Layout.BREAK_STRATEGY_SIMPLE).build()
+        }
+        var size=66f
+        var lines=layout(size)
+        while ((lines.lineCount>2 || lines.height>144) && size>44f) { size-=1f; lines=layout(size) }
+        require(lines.lineCount <= 2 && lines.height <= 144) { "Ad headline does not fit legibly; shorten it without losing the product identity" }
+        // Retain the product noun: wrapping is preferable to a two-word crop.
+        c.save();c.translate(54f,166f);lines.draw(c);c.restore()
     }
     private fun closing(c: Canvas,t: Float) {
         c.drawColor(INK)

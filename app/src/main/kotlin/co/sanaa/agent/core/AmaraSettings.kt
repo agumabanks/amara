@@ -9,9 +9,9 @@ import android.content.Context
  * The Flutter UI reads/writes these via MethodChannel.
  * Settings are persisted in SecureConfig.
  */
-class AmaraSettings(context: Context) {
+class AmaraSettings(context: Context, useEncryptedPrefs: Boolean = true) {
 
-    private val config = SecureConfig(context)
+    private val config = SecureConfig(context, useEncryptedPrefs)
     private val power = OwnerPower(context)
     private val shorts = co.sanaa.agent.core.shorts.ShortsSettings(context)
 
@@ -164,6 +164,8 @@ class AmaraSettings(context: Context) {
         "whatsAppAlwaysOn" to whatsAppAlwaysOn,
         "whatsAppFollowUpDays" to whatsAppFollowUpDays,
         "memoryBackupEnabled" to memoryBackupEnabled,
+        "operationalReportingEnabled" to config.operationalReportingEnabled,
+        "telemetryOptIn" to config.telemetryOptIn,
         "memoryAutoRestoreEnabled" to memoryAutoRestoreEnabled,
         "lastMemoryBackupAt" to config.lastMemoryBackupAt,
         "sokoAutoSync" to sokoAutoSync,
@@ -199,6 +201,8 @@ class AmaraSettings(context: Context) {
                     config.publicAdWhatsApp = if (raw.isBlank()) "" else co.sanaa.agent.modules.AmaraAdSpec.phone(raw) ?: return false
                 }
                 "maxRetryCooldownMinutes" -> config.maxRetryCooldownMinutes = (value as Number).toInt()
+                "operationalReportingEnabled" -> config.operationalReportingEnabled = value as Boolean
+                "telemetryOptIn" -> config.telemetryOptIn = value as Boolean
                 "tikTokEnabled" -> tikTokEnabled = value as Boolean
                 "tikTokIntervalMinutes" -> tikTokInterval = TikTokInterval.fromMinutes((value as Number).toLong())
                 "tikTokDailyCap" -> tikTokDailyCap = (value as Number).toInt()

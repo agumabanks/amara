@@ -18,7 +18,7 @@ class AmaraAdRendererTest {
         val source = Bitmap.createBitmap(600, 300, Bitmap.Config.ARGB_8888)
         source.eraseColor(Color.RED)
         val bytes = ByteArrayOutputStream().also { source.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
-        val rendered = AmaraAdRenderer.render(bytes, AmaraAdSpec("Office Chair", "UGX 120,000", "+256700000001", "Sanaa Media"))
+        val rendered = AmaraAdRenderer.render(bytes, AmaraAdSpec("Smart Business Cards", "UGX 120,000", "+256700000001", "Sanaa Media"))
         val output = BitmapFactory.decodeByteArray(rendered, 0, rendered.size)
         assertEquals(1080, output.width); assertEquals(1920, output.height)
         assertTrue(Color.red(output.getPixel(480, 750)) > 220)

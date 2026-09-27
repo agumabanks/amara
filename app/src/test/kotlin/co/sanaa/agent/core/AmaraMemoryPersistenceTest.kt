@@ -59,8 +59,28 @@ class AmaraMemoryPersistenceTest {
             "revenue_delivery_observations",
             "failure_records", "brain_failures",
         ).forEach { table -> assertTrue("Missing table $table", table in tables) }
-        assertEquals(21, db.version)
+        assertEquals(22, db.version)
         db.close()
+    }
+
+    @Test fun legacyUnscopedProductsCannotEnterANewShopsPromptOrCommercialFeed() {
+        context.deleteDatabase(AmaraMemory.DATABASE_NAME)
+        SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(AmaraMemory.DATABASE_NAME).path, null).use { db ->
+            db.execSQL("CREATE TABLE products_seen (id INTEGER PRIMARY KEY, source_app TEXT, product_name TEXT, price_ugx INTEGER, description TEXT, last_seen_timestamp INTEGER, improvements_made TEXT)")
+            db.execSQL("INSERT INTO products_seen (source_app, product_name, last_seen_timestamp) VALUES ('Soko Terminal', 'Other shop printer', 1)")
+            db.execSQL("CREATE TABLE business_findings (id INTEGER PRIMARY KEY, created_at INTEGER, source_app TEXT, subject TEXT, issue TEXT, severity TEXT, confidence REAL, evidence TEXT, recommendation TEXT, status TEXT)")
+            db.execSQL("INSERT INTO business_findings (created_at, source_app, subject, issue, severity, confidence, evidence, recommendation, status) VALUES (1, 'Soko Terminal', 'Other shop printer', 'Needs repair', 'medium', 1.0, 'old', 'repair', 'open')")
+            db.version = 21
+        }
+        AmaraMemory(context).use { upgraded ->
+            assertTrue(upgraded.recentProductNames().isEmpty())
+            assertTrue(upgraded.openBusinessFindings().isEmpty())
+            assertFalse(upgraded.promptContext().contains("Other shop printer"))
+            upgraded.readableDatabase.rawQuery("SELECT shop_scope FROM products_seen", null).use { c ->
+                assertTrue(c.moveToFirst())
+                assertTrue(c.isNull(0))
+            }
+        }
     }
 
     @Test fun v13ToLatestMigrationAddsBrainFailureColumnsAndRevenueObservationTables() {
@@ -80,7 +100,7 @@ class AmaraMemoryPersistenceTest {
             db.execSQL("INSERT INTO brain_failures (created_at, stage, model, disposition) VALUES (1, 'planner_plan', 'legacy-model', 'FAILED_PERMANENT')")
         }
         AmaraMemory(context).readableDatabase.use { db ->
-            assertEquals(21, db.version)
+            assertEquals(22, db.version)
             val columns = mutableSetOf<String>()
             db.rawQuery("PRAGMA table_info(brain_failures)", null).use { cursor ->
                 while (cursor.moveToNext()) columns.add(cursor.getString(1))
@@ -362,7 +382,7 @@ class AmaraMemoryPersistenceTest {
         assertEquals(0, countRows("actions"))
         assertEquals(0, countRows("side_effect_transactions"))
         // Schema survives so the app keeps functioning after deletion.
-        assertEquals(21, SQLiteDatabase.openDatabase(
+        assertEquals(22, SQLiteDatabase.openDatabase(
             context.getDatabasePath(AmaraMemory.DATABASE_NAME).path, null, SQLiteDatabase.OPEN_READONLY,
         ).use { it.version })
     }

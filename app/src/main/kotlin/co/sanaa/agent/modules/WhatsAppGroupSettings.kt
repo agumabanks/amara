@@ -110,7 +110,8 @@ class WhatsAppGroupSettings(context: Context) {
             return
         }
         val failures=if(success) 0 else data.optInt("consecutiveFailures")+1
-        val hold=!success && (failures>=2 || reason.contains("recipient_unavailable") || reason.contains("recipient_not_unique") || reason.contains("Uncertain",true))
+        val hold=!success && (failures>=2 || reason.contains("recipient_unavailable") || reason.contains("recipient_not_unique") ||
+            reason.contains("Uncertain",true) || reason.startsWith("Terminal shop verification unavailable"))
         data.put("consecutiveFailures",failures).put("paused",hold).put("lastReason",reason.take(500))
         data.put("lastOutcome",status).put("lastAttempt",System.currentTimeMillis()).put("nextDue",System.currentTimeMillis()+interval(entry)*60_000L)
         if(success) data.put("lastSuccess",System.currentTimeMillis())

@@ -1,0 +1,1162 @@
+{
+  "schema_version": 1,
+  "note": "Coverage inventory; overlapping rows are not distinct-incident totals. All require fresh build-specific triage.",
+  "issues": [
+    {
+      "id": "OBS-001",
+      "title": "oppo: TIKTOK_COMMENT_REPLY / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "TIKTOK_COMMENT_REPLY",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 57,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "36 outcome events in partial build-56 journal ending 2026-09-23T22:11:00.680000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json",
+        "evidence/P1-pre76-live-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 36,
+      "next_action": "Split own-post reply from community cycle, inspect PARTIAL sub-actions and compare one verified target-bound comment.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T06:38:07.738000+00:00",
+        "last_seen": "2026-09-23T22:08:19.434000+00:00",
+        "outcome_events": 36,
+        "distinct_work_keys": 34,
+        "offered_events_same_kind": 84,
+        "done_events_same_kind": 30,
+        "last_done_at": "2026-09-23T18:57:53.591000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-002",
+      "title": "oppo: TIKTOK_POST_PUBLISH / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "TIKTOK_POST_PUBLISH",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 23,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "8 outcome events in partial build-56 journal ending 2026-09-23T22:11:00.680000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 8,
+      "next_action": "Separate preparation, dispatch and own-profile verification; reconcile uncertain receipts before a current-build canary.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T07:06:26.548000+00:00",
+        "last_seen": "2026-09-23T20:49:54.502000+00:00",
+        "outcome_events": 8,
+        "distinct_work_keys": 8,
+        "offered_events_same_kind": 46,
+        "done_events_same_kind": 38,
+        "last_done_at": "2026-09-23T22:06:47.635000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-003",
+      "title": "oppo: YOUTUBE_SHORT_PUBLISH / PRECONDITION_GONE",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "YOUTUBE_SHORT_PUBLISH",
+      "failure_class": "PRECONDITION_GONE",
+      "historical_attempts": 16,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "16 outcome events in partial build-56 journal ending 2026-09-23T22:11:00.680000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json",
+        "evidence/P1-pre76-live-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 16,
+      "next_action": "Identify exact source/description stage and channel receipt; hold any possibly dispatched upload.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T08:39:14.218000+00:00",
+        "last_seen": "2026-09-23T21:20:04.372000+00:00",
+        "outcome_events": 16,
+        "distinct_work_keys": 16,
+        "offered_events_same_kind": 24,
+        "done_events_same_kind": 7,
+        "last_done_at": "2026-09-23T21:23:18.321000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-004",
+      "title": "oppo: WA_REPLY_INBOUND / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "WA_REPLY_INBOUND",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 2,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-56 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Compare origin-verification failure with verified inbound reply, including long-message and draft continuity.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 135,
+        "done_events_same_kind": 48,
+        "last_done_at": "2026-09-23T22:00:01.425000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-005",
+      "title": "oppo: WA_BROADCAST / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "WA_BROADCAST",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 153,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-56 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json",
+        "evidence/P1-W2-group-recovery-checkpoint.md"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Correlate the exact group skip/failure branch with bound directory ID and Terminal scope; then run owner-designated per-group media and recovery canaries on each enabled device.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 23,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-006",
+      "title": "oppo: INTERNAL_COMMERCIAL_CYCLE / POLICY_BLOCKED",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "INTERNAL_COMMERCIAL_CYCLE",
+      "failure_class": "POLICY_BLOCKED",
+      "historical_attempts": 6,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-56 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Verify configured policy, eligibility and whether skip is expected rather than a work failure.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 4,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-007",
+      "title": "oppo: SOKO_INVENTORY_CHECK / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "SOKO_INVENTORY_CHECK",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 2,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-56 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Inspect signed shop session and per-surface audit result; compare a successful inventory read.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 2,
+        "done_events_same_kind": 2,
+        "last_done_at": "2026-09-23T17:07:35.418000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-008",
+      "title": "oppo: INTERNAL_CONFIG_SYNC / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "INTERNAL_CONFIG_SYNC",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 2,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-56 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "After installing the correlated build, verify an authenticated config fetch and preserve any new request ID for a matching server log; historical failure remains unproven.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 1,
+        "done_events_same_kind": 1,
+        "last_done_at": "2026-09-23T13:29:47.818000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-009",
+      "title": "oppo: SOKO_AUDIT / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "SOKO_AUDIT",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 3,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-56 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Identify failed Terminal surface and shop proof; compare successful alerts/bookings read.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 4,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-010",
+      "title": "oppo: YOUTUBE_SHORT_PUBLISH / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "YOUTUBE_SHORT_PUBLISH",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 4,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "2 outcome events in partial build-56 journal ending 2026-09-23T22:11:00.680000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json",
+        "evidence/P1-pre76-live-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 2,
+      "next_action": "Identify exact source/description stage and channel receipt; hold any possibly dispatched upload.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T10:50:39.792000+00:00",
+        "last_seen": "2026-09-23T21:03:47.500000+00:00",
+        "outcome_events": 2,
+        "distinct_work_keys": 2,
+        "offered_events_same_kind": 24,
+        "done_events_same_kind": 7,
+        "last_done_at": "2026-09-23T21:23:18.321000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-011",
+      "title": "oppo: WA_BROADCAST / POLICY_BLOCKED",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "WA_BROADCAST",
+      "failure_class": "POLICY_BLOCKED",
+      "historical_attempts": 7,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-56 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json",
+        "evidence/P1-W2-group-recovery-checkpoint.md"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Correlate the exact group skip/failure branch with bound directory ID and Terminal scope; then run owner-designated per-group media and recovery canaries on each enabled device.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 23,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-012",
+      "title": "oppo: WA_REPLY_INBOUND / UI_MISMATCH",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "WA_REPLY_INBOUND",
+      "failure_class": "UI_MISMATCH",
+      "historical_attempts": 30,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "27 outcome events in partial build-56 journal ending 2026-09-23T22:11:00.680000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 27,
+      "next_action": "Compare origin-verification failure with verified inbound reply, including long-message and draft continuity.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T08:35:38.880000+00:00",
+        "last_seen": "2026-09-23T20:11:31.485000+00:00",
+        "outcome_events": 27,
+        "distinct_work_keys": 11,
+        "offered_events_same_kind": 135,
+        "done_events_same_kind": 48,
+        "last_done_at": "2026-09-23T22:00:01.425000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-013",
+      "title": "oppo: TIKTOK_COMMENT_REPLY / UI_MISMATCH",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "TIKTOK_COMMENT_REPLY",
+      "failure_class": "UI_MISMATCH",
+      "historical_attempts": 11,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "12 outcome events in partial build-56 journal ending 2026-09-23T22:11:00.680000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json",
+        "evidence/P1-pre76-live-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 12,
+      "next_action": "Split own-post reply from community cycle, inspect PARTIAL sub-actions and compare one verified target-bound comment.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T07:00:53.871000+00:00",
+        "last_seen": "2026-09-23T21:47:35.300000+00:00",
+        "outcome_events": 12,
+        "distinct_work_keys": 11,
+        "offered_events_same_kind": 84,
+        "done_events_same_kind": 30,
+        "last_done_at": "2026-09-23T18:57:53.591000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-014",
+      "title": "oppo: TIKTOK_STORY_PUBLISH / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "TIKTOK_STORY_PUBLISH",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 1,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "1 outcome events in partial build-56 journal ending 2026-09-23T22:11:00.680000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 1,
+      "next_action": "Inspect source feed receipt, Story eligibility and pre/post-dispatch stage.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T10:53:11.954000+00:00",
+        "last_seen": "2026-09-23T10:53:11.954000+00:00",
+        "outcome_events": 1,
+        "distinct_work_keys": 1,
+        "offered_events_same_kind": 38,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-015",
+      "title": "oppo: MARKET_ANALYSIS / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "oppo",
+      "kind": "MARKET_ANALYSIS",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 1,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "1 outcome events in partial build-56 journal ending 2026-09-23T22:11:00.680000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 1,
+      "next_action": "Identify catalogue/session failure or expected policy hold and compare a successful same-shop analysis.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T21:00:22.823000+00:00",
+        "last_seen": "2026-09-23T21:00:22.823000+00:00",
+        "outcome_events": 1,
+        "distinct_work_keys": 1,
+        "offered_events_same_kind": 44,
+        "done_events_same_kind": 39,
+        "last_done_at": "2026-09-23T22:00:33.755000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-016",
+      "title": "tps: TIKTOK_COMMENT_REPLY / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "TIKTOK_COMMENT_REPLY",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 30,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "1 outcome events in partial build-55 journal ending 2026-09-23T22:11:05.269000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json",
+        "evidence/P1-pre76-live-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 1,
+      "next_action": "Split own-post reply from community cycle, inspect PARTIAL sub-actions and compare one verified target-bound comment.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T21:13:46.611000+00:00",
+        "last_seen": "2026-09-23T21:13:46.611000+00:00",
+        "outcome_events": 1,
+        "distinct_work_keys": 1,
+        "offered_events_same_kind": 26,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-017",
+      "title": "tps: TIKTOK_POST_PUBLISH / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "TIKTOK_POST_PUBLISH",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 26,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "v69 TPS: one exact feed effect VERIFIED at 2026-09-24T12:28:23Z after AVIF gallery fallback; another feed effect UNCERTAIN at 12:33:46Z after upload made no observable progress; Story UNCERTAIN at 12:31:12Z.",
+      "evidence": [
+        "evidence/P0-current-build-summary.json",
+        "evidence/P4-event-sync-checkpoint.md"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 11,
+      "next_action": "Reconcile the uncertain feed and Story against exact own-profile evidence without replay, diagnose the stalled upload stage, and verify repeated final-build posts/cadence before closing.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T10:32:13.473000+00:00",
+        "last_seen": "2026-09-23T21:43:45.743000+00:00",
+        "outcome_events": 11,
+        "distinct_work_keys": 6,
+        "offered_events_same_kind": 8,
+        "done_events_same_kind": 2,
+        "last_done_at": "2026-09-23T12:09:47.843000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-018",
+      "title": "tps: INTERNAL_COMMERCIAL_CYCLE / POLICY_BLOCKED",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "INTERNAL_COMMERCIAL_CYCLE",
+      "failure_class": "POLICY_BLOCKED",
+      "historical_attempts": 5,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-55 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Verify configured policy, eligibility and whether skip is expected rather than a work failure.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 3,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-019",
+      "title": "tps: INTERNAL_CONFIG_SYNC / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "INTERNAL_CONFIG_SYNC",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 2,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-55 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "After installing the correlated build, verify an authenticated config fetch and preserve any new request ID for a matching server log; historical failure remains unproven.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 1,
+        "done_events_same_kind": 1,
+        "last_done_at": "2026-09-23T12:00:11.270000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-020",
+      "title": "tps: SOKO_AUDIT / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "SOKO_AUDIT",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 3,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-55 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Identify failed Terminal surface and shop proof; compare successful alerts/bookings read.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 3,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-021",
+      "title": "tps: SOKO_INVENTORY_CHECK / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "SOKO_INVENTORY_CHECK",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 2,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-55 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Inspect signed shop session and per-surface audit result; compare a successful inventory read.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 1,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-022",
+      "title": "tps: TIKTOK_STORY_PUBLISH / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "TIKTOK_STORY_PUBLISH",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 1,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-55 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Inspect source feed receipt, Story eligibility and pre/post-dispatch stage.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 2,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-023",
+      "title": "tps: WA_BROADCAST / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "WA_BROADCAST",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 2,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-55 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json",
+        "evidence/P1-W2-group-recovery-checkpoint.md"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Correlate the exact group skip/failure branch with bound directory ID and Terminal scope; then run owner-designated per-group media and recovery canaries on each enabled device.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 0,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-024",
+      "title": "tps: MARKET_ANALYSIS / UNKNOWN",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "MARKET_ANALYSIS",
+      "failure_class": "UNKNOWN",
+      "historical_attempts": 2,
+      "phase": "P0",
+      "status": "investigating",
+      "current_build_recurrence": "not observed in partial build-55 journal; eligible recurrence unproven",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 0,
+      "next_action": "Identify catalogue/session failure or expected policy hold and compare a successful same-shop analysis.",
+      "current_build_observation": {
+        "first_seen": null,
+        "last_seen": null,
+        "outcome_events": 0,
+        "distinct_work_keys": 0,
+        "offered_events_same_kind": 49,
+        "done_events_same_kind": 26,
+        "last_done_at": "2026-09-23T22:00:05.691000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-025",
+      "title": "tps: TIKTOK_COMMENT_REPLY / UI_MISMATCH",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "TIKTOK_COMMENT_REPLY",
+      "failure_class": "UI_MISMATCH",
+      "historical_attempts": 37,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "18 outcome events in partial build-55 journal ending 2026-09-23T22:11:05.269000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json",
+        "evidence/P1-pre76-live-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 18,
+      "next_action": "Split own-post reply from community cycle, inspect PARTIAL sub-actions and compare one verified target-bound comment.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T10:18:09.921000+00:00",
+        "last_seen": "2026-09-23T21:44:35.428000+00:00",
+        "outcome_events": 18,
+        "distinct_work_keys": 15,
+        "offered_events_same_kind": 26,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-026",
+      "title": "tps: SOKO_INVENTORY_CHECK / UI_MISMATCH",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "SOKO_INVENTORY_CHECK",
+      "failure_class": "UI_MISMATCH",
+      "historical_attempts": 5,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "3 outcome events in partial build-55 journal ending 2026-09-23T22:11:05.269000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 3,
+      "next_action": "Inspect signed shop session and per-surface audit result; compare a successful inventory read.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T20:43:28.650000+00:00",
+        "last_seen": "2026-09-23T21:28:47.395000+00:00",
+        "outcome_events": 3,
+        "distinct_work_keys": 1,
+        "offered_events_same_kind": 1,
+        "done_events_same_kind": 0,
+        "last_done_at": null,
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "OBS-027",
+      "title": "tps: JIJI_SCRAPE / UI_MISMATCH",
+      "source": "evidence/device-summary.json",
+      "device": "tps",
+      "kind": "JIJI_SCRAPE",
+      "failure_class": "UI_MISMATCH",
+      "historical_attempts": 1,
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "1 outcome events in partial build-55 journal ending 2026-09-23T22:11:05.269000+00:00",
+      "evidence": [
+        "evidence/P0-current-build-summary.json"
+      ],
+      "closure_reason": null,
+      "current_build_attempts": 1,
+      "next_action": "Inspect source UI mismatch and safe retry evidence without asserting unseen listings.",
+      "current_build_observation": {
+        "first_seen": "2026-09-23T20:42:31.272000+00:00",
+        "last_seen": "2026-09-23T20:42:31.272000+00:00",
+        "outcome_events": 1,
+        "distinct_work_keys": 1,
+        "offered_events_same_kind": 2,
+        "done_events_same_kind": 1,
+        "last_done_at": "2026-09-23T12:01:26.102000+00:00",
+        "distinct_targets": "not available in privacy-filtered outcome"
+      }
+    },
+    {
+      "id": "WA-ORIGIN",
+      "title": "Inbound origin visibility and long-message persistence",
+      "source": "BASELINE.md",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "OPPO build 56: 27 FAILED/UI_MISMATCH origin-verification outcomes and 48 DONE task outcomes in partial window; prefix guard source-fixed but not installed",
+      "evidence": [
+        "evidence/P1-W1-origin-checkpoint.md",
+        "evidence/REFRESH_20260924.md",
+        "evidence/P1-whatsapp-catalogue-consultations-20260925.md",
+        "evidence/P1-shop-nightly-business-20260925.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Observe build 77 eligible group and consultation opportunities; verify old-shop quarantine and preserve unresolved receipts. Admission-time payload retention remains under audit. See latest shop/nightly evidence.",
+      "latest_recheck": {
+        "captured_at": "2026-09-24T20:49:45Z",
+        "observation": "OPPO v69: 12 FAILED events across four failed work keys; six expired notification routes, six origin visibility failures, plus one exact contact escalation; 22 DONE require receipt correlation.",
+        "evidence": "evidence/REFRESH_20260924.json"
+      }
+    },
+    {
+      "id": "WA-GROUP",
+      "title": "Group ads: Terminal recovery, media, per-group progress",
+      "source": "BASELINE.md",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "Build81 OPPO repeated unresolved-dispatch holds and exact group search/foreground failures; no verified group ad in fresh segment. Build82 saved-route recovery patch under test.",
+      "evidence": [
+        "evidence/REFRESH_20260924.md",
+        "evidence/P1-W2-recovery-diagnosis-checkpoint.md",
+        "evidence/P1-build72-checkpoint.md",
+        "evidence/P1-whatsapp-catalogue-consultations-20260925.md",
+        "evidence/P1-catalogue-bug-hunt-20260925.md",
+        "evidence/P1-shop-nightly-business-20260925.md",
+        "evidence/P1-build77-hours-review.md",
+        "evidence/P1-headlines-platform-review-20260925.md",
+        "evidence/P1-build82-headlines-groups.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Install82 on both devices. OPPO currently owner Off: preserve until owner clarification. Then test exact saved-route recovery and full media/caption delivery; reconcile old uncertain ads individually without resetting receipts.",
+      "latest_recheck": {
+        "captured_at": "2026-09-25T13:24:25.212351+00:00",
+        "evidence": "evidence/P1-headlines-platform-review-20260925.md",
+        "observation": "Build80 OPPO: saved Announcements has no exact contact-picker result; Naalya E-Trade opens exact group and composer. Group ad delivery remains unverified."
+      }
+    },
+    {
+      "id": "WA-RECOVERY",
+      "title": "Typed retry/supersede decisions and uncertain-send protection",
+      "source": "BASELINE.md",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "Not classified from a complete post-capture 24-hour current-build window",
+      "evidence": [
+        "evidence/P1-whatsapp-catalogue-consultations-20260925.md",
+        "evidence/P1-catalogue-bug-hunt-20260925.md",
+        "evidence/P1-shop-nightly-business-20260925.md",
+        "evidence/P1-build77-hours-review.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Observe build 77 eligible group and consultation opportunities; verify old-shop quarantine and preserve unresolved receipts. Admission-time payload retention remains under audit. See latest shop/nightly evidence."
+    },
+    {
+      "id": "COMMUNITY",
+      "title": "Own-comment replies and discovery cycle partial failures",
+      "source": "BASELINE.md",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "OPPO build 56: 30 read-only/yield cycles marked DONE, 28 PARTIAL, 13 FAILED; zero verified community interactions in partial window. TPS build 55: 18 zero-caption community failures.",
+      "evidence": [
+        "evidence/P1-C1-outcome-checkpoint.md",
+        "evidence/REFRESH_20260924.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Canary the SKIPPED mapping, inspect own-post reply failures separately and resolve TPS zero-caption UI with live evidence.",
+      "latest_recheck": {
+        "captured_at": "2026-09-24T20:49:45Z",
+        "observation": "TPS v70: 15 unreadable-caption failures; OPPO v69: three own-profile identity failures and one unavailable-feed failure.",
+        "evidence": "evidence/REFRESH_20260924.json"
+      }
+    },
+    {
+      "id": "FAIRNESS",
+      "title": "Budget deferrals and starvation across eligible modules",
+      "source": "BASELINE.md",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "Not classified from a complete post-capture 24-hour current-build window",
+      "evidence": [],
+      "closure_reason": null,
+      "next_action": "Collect next current-build window and compare eligible work, attempts and effects for this issue."
+    },
+    {
+      "id": "TIKTOK",
+      "title": "Publishing, sound, story and uncertain receipt reconciliation",
+      "source": "BASELINE.md",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "Build80 TPS one VERIFIED and one UNCERTAIN upload; OPPO sound_selection_unconfirmed pre-dispatch failure. TPS read-only own profile/feed succeeded once despite earlier community failure.",
+      "evidence": [
+        "evidence/P4-event-sync-checkpoint.md",
+        "evidence/REFRESH_20260924.md",
+        "evidence/P1-build75-owner-stop-checkpoint.md",
+        "evidence/P1-build77-hours-review.md",
+        "evidence/P1-headlines-platform-review-20260925.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Install81, verify fresh effects and saved Story headline; investigate intermittent sound/caption surface; preserve uncertain receipts.",
+      "latest_recheck": {
+        "captured_at": "2026-09-25T13:24:25.212351+00:00",
+        "evidence": "evidence/P1-headlines-platform-review-20260925.md",
+        "observation": "Build79 exports show one post_tiktok VERIFIED transition per device and faster selection; older uncertain receipts retained. Build81 adds short headline and persisted Story headline fixes."
+      }
+    },
+    {
+      "id": "YT-SOURCE",
+      "title": "Independent variants and missing legacy TikTok source",
+      "source": "BASELINE.md",
+      "phase": "P2",
+      "status": "investigating",
+      "current_build_recurrence": "Not classified from a complete post-capture 24-hour current-build window",
+      "evidence": [
+        "evidence/REFRESH_20260924.md",
+        "evidence/P1-headlines-platform-review-20260925.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Collect next current-build window and compare eligible work, attempts and effects for this issue.",
+      "latest_recheck": {
+        "captured_at": "2026-09-24T20:49:45Z",
+        "observation": "OPPO v69: five source-not-found escalations. Independent product variants remain required.",
+        "evidence": "evidence/REFRESH_20260924.json"
+      }
+    },
+    {
+      "id": "YT-DISPATCH",
+      "title": "Import and description observability",
+      "source": "BASELINE.md",
+      "phase": "P2",
+      "status": "investigating",
+      "current_build_recurrence": "Not classified from a complete post-capture 24-hour current-build window",
+      "evidence": [],
+      "closure_reason": null,
+      "next_action": "Collect next current-build window and compare eligible work, attempts and effects for this issue."
+    },
+    {
+      "id": "YT-NOTICE",
+      "title": "Exact notice impacts remain unknown",
+      "source": "BASELINE.md",
+      "phase": "P2",
+      "status": "investigating",
+      "current_build_recurrence": "Release 61 OPPO YouTube own-channel grid displays Notices badges on several Shorts including Public Osa Gadgets Iphone 6S. Exact notice reason/impact is not exposed by the Android badge; made-for-kids audience is owner-intended.",
+      "evidence": [
+        "evidence/P0-report.md",
+        "evidence/P0-oppo-youtube-notices.png",
+        "evidence/P2-youtube-app-notices-20260925.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Owner-directed YouTube app grid inspection found 33 distinct Notice card descriptions and 12 without; affected Iphone 6S Edit page is Public and made for kids but exposes no reason. Obtain YouTube Studio restriction details for affected/unaffected unique videos; do not infer impact from badge."
+    },
+    {
+      "id": "CONFIG-500",
+      "title": "Config sync HTTP 500 root cause",
+      "source": "BASELINE.md",
+      "phase": "P3",
+      "status": "investigating",
+      "current_build_recurrence": "Two HTTP 500 config attempts per phone on 2026-09-23, followed by DONE; disk/DB correlation is strong but request-level cause unproven",
+      "evidence": [
+        "evidence/P0-report.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Deploy correlated Android build to both eligible phones, verify authenticated config and preserve any naturally recurring 500 request ID; historical rate-limiter DB failure is a strong time-correlated lead, not a request-level proof."
+    },
+    {
+      "id": "HEARTBEAT",
+      "title": "Read routes, producer and authenticated delivery",
+      "source": "BASELINE.md",
+      "phase": "P3",
+      "status": "confirmed_current",
+      "current_build_recurrence": "Heartbeat GET routes still target missing AgentController methods; no recent heartbeat producer observed",
+      "evidence": [
+        "evidence/P0-report.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Repair routes and prove authenticated GET/POST delivery in P3/P4."
+    },
+    {
+      "id": "TELEMETRY",
+      "title": "No recent server logs; consent, outbox, metadata filtering",
+      "source": "BASELINE.md",
+      "phase": "P4",
+      "status": "investigating",
+      "current_build_recurrence": "Not classified from a complete post-capture 24-hour current-build window",
+      "evidence": [
+        "evidence/P1-Q1-identity-journal-checkpoint.md",
+        "evidence/REFRESH_20260924.md",
+        "evidence/P4-outcome-taxonomy-checkpoint.md",
+        "evidence/P1-build72-checkpoint.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Canary the source coalescing, measure journal bytes/CPU/battery and then implement the durable consented outbox; no live delivery is yet proven.",
+      "latest_recheck": {
+        "captured_at": "2026-09-24T20:49:45Z",
+        "observation": "Live backend receiving work/health. Exact effect mapping and discrepancy between completed replies and reply receipts remain open.",
+        "evidence": "evidence/REFRESH_20260924.json"
+      }
+    },
+    {
+      "id": "HEALTH",
+      "title": "Battery, internet, manager escalation and recovery",
+      "source": "BASELINE.md",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "Existing small Chat card could hide battery/internet warnings; panel source change is not installed or live verified",
+      "evidence": [
+        "evidence/P1-H1-health-panel-checkpoint.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Canary battery 20\u219215\u2192charging recovery and offline/limited/backend-only states; verify persistent warning, hysteresis and manager alert delivery."
+    },
+    {
+      "id": "DISK",
+      "title": "Host storage pressure and journal sampling",
+      "source": "BASELINE.md",
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "Host disk full on 2026-09-23; free space fell from 53 GB at audit to 26 GB at 2026-09-24 01:47 local, then reached 79 GB after unexplained archive removal and scheduled cleanup",
+      "evidence": [
+        "evidence/P0-report.md",
+        "evidence/P0-restore-rehearsal.json",
+        "evidence/P0-storage-follow-up.md",
+        "evidence/P0-cards-local-backup.md",
+        "evidence/P1-Q1-identity-journal-checkpoint.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Verify the new local Cards backup schedule, assign off-host/PITR and shared MySQL retention owner, and monitor shared-host disk growth; the isolated restore passed."
+    },
+    {
+      "id": "BACKUP-COVERAGE",
+      "title": "Shared MySQL archive directory emptied before documented cleanup",
+      "source": "evidence/P0-storage-follow-up.md",
+      "phase": "P0",
+      "status": "confirmed_current",
+      "current_build_recurrence": "Compressed archives vanished at 2026-09-24 01:55 local and all six fresh raw dumps by 01:56:58; the 02:00 scheduled cleanup reported an already empty directory",
+      "evidence": [
+        "evidence/P0-storage-follow-up.md",
+        "evidence/P0-cards-local-backup.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Identify the responsible transfer/retention job and verify restorable current and historical MySQL copies at its destination; do not infer success from backup_status.json."
+    },
+    {
+      "id": "SOKO",
+      "title": "Inventory/audit failures and partial outcomes",
+      "source": "BASELINE.md",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "Not classified from a complete post-capture 24-hour current-build window",
+      "evidence": [
+        "evidence/REFRESH_20260924.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Collect next current-build window and compare eligible work, attempts and effects for this issue.",
+      "latest_recheck": {
+        "captured_at": "2026-09-24T20:49:45Z",
+        "observation": "TPS v70: three partial inventory checks; OPPO v69: one partial audit, POS recovery failure.",
+        "evidence": "evidence/REFRESH_20260924.json"
+      }
+    },
+    {
+      "id": "JIJI",
+      "title": "Scrape UI mismatch and safe recovery",
+      "source": "BASELINE.md",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "Not classified from a complete post-capture 24-hour current-build window",
+      "evidence": [
+        "evidence/REFRESH_20260924.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Collect next current-build window and compare eligible work, attempts and effects for this issue.",
+      "latest_recheck": {
+        "captured_at": "2026-09-24T20:49:45Z",
+        "observation": "TPS v70: one foreground-stage listing verification failure.",
+        "evidence": "evidence/REFRESH_20260924.json"
+      }
+    },
+    {
+      "id": "SHOP-BINDING",
+      "title": "Signed Terminal shop follows the currently logged-in account on OPPO and TPS",
+      "source": "evidence/P0-report.md",
+      "device": "tps",
+      "kind": "SHOP_BINDING",
+      "failure_class": "IDENTITY_CHANGE",
+      "historical_attempts": 1,
+      "phase": "P0",
+      "status": "fixed_pending_verification",
+      "current_build_recurrence": "OPPO signed scope moved 708:128 to 319:37 (Osa Gadgets) and back on release 59; Terminal account and Osa creative matched. Release 61 Amara Settings visibly shows returned Sanaa Media and read-only catalogue inspection yielded 47 listings. Old-shop effect quarantine is not yet live proven.",
+      "evidence": [
+        "evidence/P0-report.md",
+        "evidence/P0-current-build-summary.json",
+        "evidence/P3-shop-switch-checkpoint.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Prove Settings updates automatically during a future switch and reconcile old-shop queued effects across the transition without replaying uncertain actions; obtain owner-scoped publication canaries."
+    },
+    {
+      "id": "REFRESH-CAPTIONS",
+      "title": "TPS v70 community caption extraction",
+      "phase": "P1",
+      "status": "fixed_pending_verification",
+      "current_build_recurrence": "15 current-segment unreadable-caption failures",
+      "source": "evidence/REFRESH_20260924.json",
+      "evidence": [
+        "evidence/REFRESH_20260924.md",
+        "evidence/P1-C1-short-caption-checkpoint.md",
+        "evidence/P1-build71-checkpoint.md",
+        "evidence/P1-build72-checkpoint.md",
+        "evidence/P1-build75-owner-stop-checkpoint.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Both devices on build 72 read own profile/Home/post in read-only canary. Observe naturally eligible community cycles and authorized per-action receipts on both, duplicates/restarts, then a complete recurrence window; one read is not C1 closure."
+    },
+    {
+      "id": "REFRESH-REPLY-RECEIPTS",
+      "title": "Completed inbound work versus exact reply receipts",
+      "phase": "P4",
+      "status": "investigating",
+      "current_build_recurrence": "Build 75: two OPPO WA_REPLY_INBOUND DONE outcomes and two manager-notification verified effects; no customer reply effect observed in current segment.",
+      "source": "evidence/REFRESH_20260924.json",
+      "evidence": [
+        "evidence/REFRESH_20260924.md",
+        "evidence/P4-reply-attribution-checkpoint.md",
+        "evidence/P4-outcome-taxonomy-checkpoint.md",
+        "evidence/P1-build72-checkpoint.md",
+        "evidence/P4-build73-attribution-checkpoint.md",
+        "evidence/P1-build75-owner-stop-checkpoint.md",
+        "evidence/P1-whatsapp-catalogue-consultations-20260925.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Validate build 76 on both devices: exact group draft recovery, catalogue rotation and manager ASK-reference answer to the bound customer; preserve uncertain claims. See P1-whatsapp-catalogue-consultations-20260925.md."
+    },
+    {
+      "id": "REFRESH-TIMEZONE",
+      "title": "Explicit owner timezone missing on both devices",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "Build 75: actual Policy saved confirmation on both; OPPO explicit refresh returns Africa/Kampala. Cold restart and next scheduled cycle remain unverified; earlier field-only persistence claim was insufficient.",
+      "source": "evidence/REFRESH_20260924.json",
+      "evidence": [
+        "evidence/REFRESH_20260924.md",
+        "evidence/P1-owner-timezone-checkpoint.md",
+        "evidence/P1-build75-owner-stop-checkpoint.md",
+        "evidence/P1-build77-hours-review.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Observe next scheduled commercial cycle on both phones; verify no timezone-missing skip and correct local day/quiet-hour handling while existing outreach permissions remain held.",
+      "latest_recheck": {
+        "captured_at": "2026-09-25T09:48:32Z",
+        "evidence": "evidence/P1-build77-hours-review.md",
+        "observation": "Build77 both journals include missing timezone; OPPO UI says no policy configured. JSON truncation repaired but not proven cause; no unknown owner policy replaced."
+      }
+    },
+    {
+      "id": "REFRESH-ORDER-HOLD",
+      "title": "Exact approved order workflow required",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "Four OPPO order confirmation policy escalations",
+      "source": "evidence/REFRESH_20260924.json",
+      "evidence": [
+        "evidence/REFRESH_20260924.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Preserve approval boundary; verify review/dedup and classify expected-policy with evidence."
+    },
+    {
+      "id": "REFRESH-OWNER-OFF",
+      "title": "Owner stop mapped to publication failure",
+      "phase": "P1",
+      "status": "investigating",
+      "current_build_recurrence": "One OPPO FAILED publication explicitly rejected for owner Off",
+      "source": "evidence/REFRESH_20260924.json",
+      "evidence": [
+        "evidence/REFRESH_20260924.md",
+        "evidence/P1-build75-owner-stop-checkpoint.md"
+      ],
+      "closure_reason": null,
+      "next_action": "Build 75 installed on both phones with tested pre-dispatch owner-stop classification; live cancellation-race evidence still required without replay of uncertain effects."
+    }
+  ]
+}

@@ -10,6 +10,32 @@ class MarketAnalyzer(
     private val context: Context,
     private val db: MarketDatabase
 ) {
+    /**
+     * Match Soko offerings to repeated, recent Jiji/Jumia observations. A single
+     * listing is never called a trend. Returned IDs are evidence for relaxing a
+     * completed rotation, while the posting selector still enforces a repeat gap.
+     */
+    fun groundedTrendListingIds(
+        offerings: List<co.sanaa.agent.api.SokoListing>,
+        since: Long = System.currentTimeMillis() - 7L * 86_400_000L,
+    ): Set<String> {
+        val counts = mutableMapOf<String, Int>()
+        db.readableDatabase.rawQuery(
+            "SELECT title FROM jiji_listings WHERE last_seen>=? AND source IN ('JIJI','JUMIA')",
+            arrayOf(since.toString()),
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                titleTokens(cursor.getString(0)).forEach { token -> counts[token] = (counts[token] ?: 0) + 1 }
+            }
+        }
+        val repeated = counts.filterValues { it >= 3 }.keys
+        return offerings.filter { titleTokens(it.title).any(repeated::contains) }.mapTo(mutableSetOf()) { it.id }
+    }
+
+    private fun titleTokens(value: String): Set<String> = value.lowercase()
+        .split(Regex("[^a-z0-9]+"))
+        .filter { it.length >= 4 && it !in setOf("with", "from", "this", "that", "service", "product") }
+        .toSet()
 
     /** Persist dated observations and catalogue-specific comparisons for later review. */
     fun recordReview(offerings: List<co.sanaa.agent.api.SokoListing>, now: Long = System.currentTimeMillis()) {
@@ -20,14 +46,14 @@ class MarketAnalyzer(
                 val a=analyzeCategory(category)
                 val recent=writable.rawQuery("SELECT 1 FROM market_snapshots WHERE category=? AND snapshot_at>=?",arrayOf(category,(now-3_600_000).toString())).use { it.moveToFirst() }
                 if(!recent && a.totalListings>0) writable.execSQL("INSERT INTO market_snapshots(category,snapshot_at,avg_price_ugx,min_price_ugx,max_price_ugx,median_price_ugx,total_listings,hot_products) VALUES(?,?,?,?,?,?,?,?)",
-                    arrayOf(category,now,a.avgPriceUgx,a.minPriceUgx,a.maxPriceUgx,a.medianPriceUgx,a.totalListings,"[]"))
+                    arrayOf<Any>(category,now,a.avgPriceUgx,a.minPriceUgx,a.maxPriceUgx,a.medianPriceUgx,a.totalListings,"[]"))
             }
             for(item in offerings) {
                 if(item.priceUgx<=0 || item.priceUgx>Int.MAX_VALUE) continue
                 val position=compareOurProduct(item.title,item.priceUgx.toInt())
                 writable.delete("soko_vs_market","soko_product_id=?",arrayOf(item.id))
                 writable.execSQL("INSERT INTO soko_vs_market(soko_product_id,soko_title,soko_price_ugx,market_avg_ugx,market_min_ugx,market_max_ugx,price_position,competitors_count,analyzed_at,recommendation) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    arrayOf(item.id,item.title,item.priceUgx,position.marketAvgUgx,position.marketMinUgx,position.marketMaxUgx,position.position,position.competitorCount,now,position.recommendation))
+                    arrayOf<Any>(item.id,item.title,item.priceUgx,position.marketAvgUgx,position.marketMinUgx,position.marketMaxUgx,position.position,position.competitorCount,now,position.recommendation))
             }
             writable.delete("market_snapshots","snapshot_at<?",arrayOf((now-90L*86400000).toString()))
             writable.setTransactionSuccessful()

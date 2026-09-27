@@ -40,6 +40,23 @@ class WhatsAppGroupSettingsTest {
         assertEquals(true,settings.row(entry)["paused"])
     }
 
+    @Test fun missingTerminalSessionHoldsOnlyAffectedGroupForRecoveryWindow() {
+        val context=ApplicationProvider.getApplicationContext<Context>()
+        val settings=WhatsAppGroupSettings(context)
+        fun entry(id:String)=DirectoryEntry(id,"Group $id",null,emptySet(),true,
+            EntrySource.WHATSAPP,1L,Ambiguity.UNIQUE,Classification.UNKNOWN,CommercialConsent.UNKNOWN,emptyMap(),null,null)
+        val held=entry("terminal-hold-a")
+        val other=entry("terminal-hold-b")
+        settings.outcome(held,"FAILED",
+            "Terminal shop verification unavailable after bounded recovery; no group send attempted",
+            "attempt-a","NOT_STARTED")
+        assertEquals(true,settings.row(held)["paused"])
+        assertEquals("NOT_STARTED",settings.row(held)["lastDispatchState"])
+        assertTrue(settings.due(held) in (System.currentTimeMillis()+29*60_000L)..(System.currentTimeMillis()+31*60_000L))
+        assertEquals(false,settings.row(other)["paused"])
+        assertEquals(0L,settings.due(other))
+    }
+
     @Test fun profilesFilterWholeTopicsWithoutSharingNamesOrGrantingPermission() {
         val context=ApplicationProvider.getApplicationContext<Context>()
         val directory=ContactDirectory(ContactDirectoryStore(context))

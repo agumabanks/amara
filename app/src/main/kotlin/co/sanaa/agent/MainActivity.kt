@@ -71,7 +71,11 @@ class MainActivity : FlutterActivity() {
             accessibilityPrompt = null
             return
         }
-        if (accessibilityPromptShown) return
+        if (accessibilityPromptShown) {
+            if (accessibilityPrompt?.isShowing == true)
+                accessibilityPromptHandler.postDelayed(accessibilityPromptCheck, 1500L)
+            return
+        }
         accessibilityPromptShown = true
         accessibilityPrompt = android.app.AlertDialog.Builder(this)
             .setTitle("Turn on Amara phone access")
@@ -79,6 +83,9 @@ class MainActivity : FlutterActivity() {
             .setPositiveButton("Open settings") { _, _ -> permissions.openAccessibilitySettings() }
             .setNegativeButton("Later", null)
             .show()
+        // Binding can finish after onResume. Dismiss a stale recovery prompt without
+        // asking the owner to toggle a service that is already connected.
+        accessibilityPromptHandler.postDelayed(accessibilityPromptCheck, 1500L)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -185,7 +192,7 @@ class MainActivity : FlutterActivity() {
                             else requested += label
                         }
                         if(config.jijiScrapingEnabled && runtime.jijiScraper.isInstalled())
-                            offer(co.sanaa.agent.core.work.WorkKind.JIJI_SCRAPE,"Jiji",org.json.JSONObject().put("category","Printers & Scanners").put("query",query))
+                            offer(co.sanaa.agent.core.work.WorkKind.JIJI_SCRAPE,"Jiji",org.json.JSONObject().put("catalogue_research",query.isBlank()).put("query",query))
                         else held += "Enable Jiji research and install Jiji"
                         if(config.jumiaIntelligenceEnabled && runtime.jumiaScraper.isInstalled())
                             offer(co.sanaa.agent.core.work.WorkKind.JUMIA_CAPTURE,"Jumia",org.json.JSONObject())
@@ -369,6 +376,82 @@ class MainActivity : FlutterActivity() {
                     }
                     withContext(Dispatchers.Main) { result.success(receipt) }
                 }
+                "actionReceipts" -> CoroutineScope(Dispatchers.IO).launch {
+                    // Owner-visible receipt reads. Receipts carry redacted detail only;
+                    // customer conversation content is never included here.
+                    val receipts = co.sanaa.agent.core.ModuleActivityStore(applicationContext).use { store ->
+                        store.receipts(
+                            module = call.argument<String>("module"),
+                            outcome = call.argument<String>("outcome"),
+                            query = call.argument<String>("query"),
+                            limit = call.argument<Int>("limit") ?: 50,
+                            offset = call.argument<Int>("offset") ?: 0,
+                        )
+                    }
+                    withContext(Dispatchers.Main) { result.success(receipts) }
+                }
+                "receiptHistory" -> CoroutineScope(Dispatchers.IO).launch {
+                    val history = co.sanaa.agent.core.ModuleActivityStore(applicationContext).use { store ->
+                        store.receiptHistory(call.argument<String>("key").orEmpty())
+                    }
+                    withContext(Dispatchers.Main) { result.success(history) }
+                }
+                "meetingCommitments" -> CoroutineScope(Dispatchers.IO).launch {
+                    val items = co.sanaa.agent.core.CommitmentStore(applicationContext).use { store ->
+                        store.commitments().map { item -> mapOf(
+                            "id" to item.id, "conversationKey" to item.conversationKey,
+                            "subject" to item.subject, "type" to item.type,
+                            "status" to item.confirmationStatus, "agreedAt" to item.agreedAt,
+                            "timezone" to item.timezone, "reminderMinutes" to item.reminderLeadMinutes,
+                            "recipients" to item.reminderRecipients, "nextAction" to item.nextAction,
+                            "revision" to item.revision,
+                            "missed" to (item.confirmationStatus == co.sanaa.agent.core.CommitmentStore.Confirmation.AGREED &&
+                                item.agreedAt > 0 && System.currentTimeMillis() > item.agreedAt &&
+                                store.remindersFor(item.id).none { it["state"] == "SENT" }),
+                            "reminders" to store.remindersFor(item.id),
+                        ) }
+                    }
+                    withContext(Dispatchers.Main) { result.success(items) }
+                }
+                "cancelMeetingCommitment" -> CoroutineScope(Dispatchers.IO).launch {
+                    val cancelled = co.sanaa.agent.core.CommitmentStore(applicationContext).use { store ->
+                        store.cancel(call.argument<String>("id").orEmpty(), "Owner cancelled in Amara")
+                    }
+                    withContext(Dispatchers.Main) { result.success(cancelled) }
+                }
+                "confirmMeetingCommitment" -> CoroutineScope(Dispatchers.IO).launch {
+                    val outcome = runCatching {
+                        val id = call.argument<String>("id").orEmpty()
+                        val timezone = call.argument<String>("timezone").orEmpty().trim()
+                        val target = co.sanaa.agent.core.Normalizer.normalizeUganda(call.argument<String>("target"))
+                            ?: error("A verified Uganda phone number is required")
+                        val zone = java.time.ZoneId.of(timezone)
+                        val leadMinutes = (call.argument<Int>("reminderMinutes") ?: 5).coerceIn(1, 60)
+                        val local = java.time.LocalDateTime.parse(call.argument<String>("localDateTime").orEmpty())
+                        require(zone.rules.getValidOffsets(local).size == 1) { "This local time is ambiguous in the chosen timezone" }
+                        val agreedAt = local.atZone(zone).toInstant().toEpochMilli()
+                        require(agreedAt > System.currentTimeMillis() + leadMinutes * 60_000L) {
+                            "Meeting must be later than the requested reminder lead time"
+                        }
+                        require(zone.id == timezone) { "Use an explicit IANA timezone" }
+                        require(call.argument<Boolean>("agreementConfirmed") == true) { "Confirm both people agreed first" }
+                        val scope = co.sanaa.agent.core.TerminalShopIdentity.readFresh(applicationContext).scope
+                        co.sanaa.agent.core.CommitmentStore(applicationContext).use { store ->
+                            val existing = store.byId(id) ?: error("Meeting request is missing")
+                            require(existing.conversationKey.startsWith("$scope:")) { "Request belongs to another shop" }
+                            require(existing.confirmationStatus != co.sanaa.agent.core.CommitmentStore.Confirmation.CANCELLED) { "Cancelled request cannot be reused" }
+                            store.upsert(existing.copy(
+                                participants = org.json.JSONArray().put(org.json.JSONObject().put("target", target)),
+                                agreedAt = agreedAt, timezone = timezone,
+                                confirmationStatus = co.sanaa.agent.core.CommitmentStore.Confirmation.AGREED,
+                                reminderRecipients = if (call.argument<Boolean>("remindCustomer") == true) "customer" else "owner",
+                                reminderLeadMinutes = leadMinutes.toLong(),
+                                nextAction = "Meeting confirmed by owner",
+                            ), "Owner confirmed agreement and time")
+                        }
+                    }
+                    withContext(Dispatchers.Main) { outcome.fold(result::success) { result.error("MEETING_ERROR", it.message, null) } }
+                }
                 "runtimeStatusSnapshot" -> {
                     val snap = co.sanaa.agent.core.RuntimeStatusRegistry.snapshot()
                     val liveChip = RuntimeStatusBus.canonicalChipState()
@@ -392,11 +475,13 @@ class MainActivity : FlutterActivity() {
                     val snap = co.sanaa.agent.core.RuntimeStatusRegistry.snapshot()
                     val liveChip = RuntimeStatusBus.canonicalChipState()
                     val liveStatus = liveChip.status
-                    val detail = snap.detail.takeIf { it.isNotBlank() && it != "Ready for the next thing" }
+                    val ownerTaskActive = lightweightState.bool("agent_active")
+                    val detail = if (ownerTaskActive) lightweightState.string(AutonomyController.DETAIL_KEY, "Reading your request") else snap.detail.takeIf { it.isNotBlank() && it != "Ready for the next thing" }
                         ?: liveStatus?.blocker
                         ?: liveStatus?.taskLabel
                         ?: lightweightState.string(AutonomyController.DETAIL_KEY, "Ready for the next thing")
-                    val phase = snap.phase.takeIf { snap.isReady } ?: liveChip.phase.name.lowercase()
+                    val phase = if (ownerTaskActive) lightweightState.string(AutonomyController.PHASE_KEY, "observe")
+                        else snap.phase.takeIf { snap.isReady } ?: liveChip.phase.name.lowercase()
                     result.success(
                         mapOf(
                             "phase" to phase,
@@ -520,6 +605,7 @@ class MainActivity : FlutterActivity() {
                 )
                 "privacySettings" -> result.success(mapOf(
                     "telemetryOptIn" to config.telemetryOptIn,
+                    "operationalReportingEnabled" to config.operationalReportingEnabled,
                     "configSyncEnabled" to config.configSyncEnabled,
                     "artifactUploadOptIn" to config.artifactUploadOptIn,
                     "visionConsent" to config.visionConsent,
@@ -532,6 +618,7 @@ class MainActivity : FlutterActivity() {
                     var known = true
                     when (key) {
                         "telemetryOptIn" -> config.telemetryOptIn = enabled
+                        "operationalReportingEnabled" -> config.operationalReportingEnabled = enabled
                         "configSyncEnabled" -> config.configSyncEnabled = enabled
                         "artifactUploadOptIn" -> config.artifactUploadOptIn = enabled
                         "visionConsent" -> config.visionConsent = enabled
@@ -616,13 +703,14 @@ class MainActivity : FlutterActivity() {
                             it.capability==co.sanaa.agent.core.CapabilityIds.POST_TIKTOK && it.state==co.sanaa.agent.core.SideEffectState.VERIFIED
                         }.sortedByDescending { it.createdAt }
                         check(verifiedPosts.isNotEmpty()) { "No verified TikTok source post is available" }
+                        val currentShop=co.sanaa.agent.core.TerminalShopIdentity.readFresh(applicationContext).scope
                         // Reconciliation can update an older receipt after a newer
                         // publication. Select retained, verified source metadata;
                         // export still requires the exact own-profile caption.
                         val retained=co.sanaa.agent.core.shorts.ShortsQueue(applicationContext).use { queue ->
-                            queue.latestVerifiedSource(runtime.memory) ?: verifiedPosts.firstNotNullOfOrNull { receipt ->
+                            queue.latestVerifiedSource(runtime.memory,currentShop) ?: verifiedPosts.firstNotNullOfOrNull { receipt ->
                                 val payload=runtime.workQueue.withMediaCleanupReferences { refs -> refs.firstOrNull { it.key==receipt.idempotencyKey }?.let { org.json.JSONObject(it.payload) } }
-                                payload?.let { receipt.idempotencyKey to it }
+                                payload?.takeIf { it.optString("shop_scope")==currentShop }?.let { receipt.idempotencyKey to it }
                             }
                         } ?: error("Verified TikTok posts have no retained source metadata. A new verified ad is required for preparation.")
                         val (sourceKey,sourcePayload)=retained
@@ -641,10 +729,15 @@ class MainActivity : FlutterActivity() {
                     try {
                     val settings = co.sanaa.agent.core.AmaraSettings(this@MainActivity)
                     val payload = settings.getAll() + mapOf(
+                        "appVersion" to BuildConfig.VERSION_NAME,
+                        "appBuild" to BuildConfig.VERSION_CODE,
+                        "deviceModel" to listOf(android.os.Build.MANUFACTURER, android.os.Build.MODEL)
+                            .filter(String::isNotBlank).joinToString(" "),
                         "youtubeQueue" to co.sanaa.agent.core.shorts.ShortsQueue(applicationContext).use { it.summary() },
                         "moduleStats" to co.sanaa.agent.core.ModuleActivityStore(applicationContext).use { it.dashboard(runtime.memory.allSideEffectTransactions()) },
                         "tiktokCommentInbox" to co.sanaa.agent.modules.TikTokCommentInbox(applicationContext).use { it.summary() },
                         "sokoPinStored" to runtime.vault.status(AgentRuntime.SOKO_PIN_ID).let { it.configured && !it.locked },
+                        "terminalShop" to co.sanaa.agent.core.SokoTerminalBridge(applicationContext).shopStatus(),
                     )
                     withContext(Dispatchers.Main) { result.success(payload) }
                     } catch(e: Exception) { withContext(Dispatchers.Main) { result.error("SETTINGS_READ",e.message,null) } }
@@ -663,7 +756,7 @@ class MainActivity : FlutterActivity() {
                                 runCatching { co.sanaa.agent.core.TerminalShopIdentity.readFresh(applicationContext).scope }.getOrNull()) runtime.growthStore.dashboard()
                                 else mapOf("review" to "A fresh review for this shop is needed before showing recommendations."),
                             "catalogueBlocker" to (catalogue.exceptionOrNull()?.message ?: ""),
-                            "researchScope" to "Jiji: selected search or Printers & Scanners · Jumia: featured offers",
+                            "researchScope" to "Jiji: selected search or your products and services · Jumia: featured offers",
                             "operational" to runtime.health.snapshot(),"updatedAt" to System.currentTimeMillis())
                     }
                     withContext(Dispatchers.Main) {
@@ -678,6 +771,9 @@ class MainActivity : FlutterActivity() {
                         "terminalShop" to co.sanaa.agent.core.SokoTerminalBridge(this@MainActivity).shopStatus(),
                         "governor" to runtime.safetyGovernor.dashboard(),
                         "learning" to runtime.learningLoop.dashboard(),
+                        "moduleStats" to co.sanaa.agent.core.ModuleActivityStore(applicationContext).use {
+                            it.dashboard(runtime.memory.allSideEffectTransactions())
+                        },
                         "settings" to co.sanaa.agent.core.AmaraSettings(this@MainActivity).getAll(),
                     )
                     withContext(Dispatchers.Main) { result.success(payload) }

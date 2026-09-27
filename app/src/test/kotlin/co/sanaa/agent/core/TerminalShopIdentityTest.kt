@@ -1,5 +1,7 @@
 package co.sanaa.agent.core
 import android.util.Base64
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import org.json.JSONObject
 import java.security.KeyPairGenerator
 import java.security.Signature
@@ -27,5 +29,21 @@ class TerminalShopIdentityTest {
         assertTrue(runCatching { TerminalShopIdentity.verify(proof(),pem(),1100) }.isFailure)
         assertTrue(runCatching { TerminalShopIdentity.verify(proof().replaceFirst(".","x."),pem(),1050) }.isFailure)
         assertTrue(runCatching { TerminalShopIdentity.verify(proof(1400),pem(),1050) }.isFailure)
+    }
+    @Test fun repeatedProofIsCoalescedButRefreshAndShopChangeRemainVisible() {
+        val context=ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("terminal_shop_identity",Context.MODE_PRIVATE).edit().clear().commit()
+        val journal=EvaluationJournal(context)
+        journal.start()
+        val first=TerminalShopIdentity(22,7,"Osa Gadgets",1100,"proof-a")
+        TerminalShopIdentity.acknowledgeScope(context,first)
+        TerminalShopIdentity.acknowledgeScope(context,first)
+        TerminalShopIdentity.acknowledgeScope(context,first.copy(expiresAt=1200))
+        TerminalShopIdentity.acknowledgeScope(context,first.copy(expiresAt=1200),"terminal_identity_refreshed")
+        TerminalShopIdentity.acknowledgeScope(context,first.copy(shopId=8,expiresAt=1200))
+        val events=journal.exportObservation()!!.readLines().map { JSONObject(it).getString("event") }
+        assertEquals(3,events.count { it=="terminal_identity_observed" })
+        assertEquals(1,events.count { it=="terminal_identity_refreshed" })
+        assertEquals(1,events.count { it=="terminal_shop_changed" })
     }
 }

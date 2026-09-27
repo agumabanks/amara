@@ -27,6 +27,24 @@ class AmaraMotionSceneTest {
         }
         frame.recycle();photos.forEach(Bitmap::recycle)
     }
+    @Test fun headlineIsFullyVisibleAtFirstFrameAndThroughoutFirstThreeSeconds() {
+        val photo=Bitmap.createBitmap(400,300,Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+        for (title in listOf("Date Stamp", "Smart Business Cards", "Solar Water Pump")) {
+            val scene=AmaraMotionScene(AmaraAdSpec(title,"Ask for a quote",null,"Sanaa Media"),listOf(photo))
+            val first=Bitmap.createBitmap(720,1280,Bitmap.Config.ARGB_8888)
+            val later=Bitmap.createBitmap(720,1280,Bitmap.Config.ARGB_8888)
+            scene.draw(Canvas(first),0f); scene.draw(Canvas(later),3f)
+            fun darkPixels(frame: Bitmap) = (166 until 310).sumOf { y ->
+                (54 until 598).count { x -> frame.getPixel(x,y)==AmaraMotionScene.INK }
+            }
+            assertTrue("Headline must have substantial visible ink: $title",darkPixels(first)>2000)
+            assertEquals(darkPixels(first),darkPixels(later))
+            val out=File("build/reports/headline-preview").apply { mkdirs() }
+            File(out,title.replace(' ','-')+".png").outputStream().use { first.compress(Bitmap.CompressFormat.PNG,100,it) }
+            first.recycle();later.recycle()
+        }
+        photo.recycle()
+    }
     @Test fun timelineAlternatesContactAndShowsGalleryBeforeSharedClosing() {
         assertTrue(AmaraMotionScene.ctaWhatsApp(1f,true))
         assertFalse(AmaraMotionScene.ctaWhatsApp(4f,true))

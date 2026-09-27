@@ -1,0 +1,48 @@
+{
+  "updated_at": "2026-09-21T23:40:00+02:00",
+  "release": {
+    "version_name": "0.10.36",
+    "version_code": 49,
+    "sha256": "b6b4c923fa5e8dd3692318f83923c9ffafc394dab3f980b2c4a46c0362fb99d9"
+  },
+  "tests": {
+    "android": 1068,
+    "android_failures": 0,
+    "flutter": 37,
+    "flutter_failures": 0,
+    "side_effect_boundary": "pass_215_files"
+  },
+  "devices": {
+    "oppo": {
+      "serial": "192.168.1.64:37207",
+      "installed": true,
+      "certified": true,
+      "first_install_preserved": true
+    },
+    "tps": {
+      "serial": "192.168.1.67:5555",
+      "installed": true,
+      "certified": true,
+      "first_install_preserved": true
+    }
+  },
+  "areas": {
+    "receipts": "implemented_tested_installed",
+    "whatsapp_memory": "implemented_tested_installed_live_long_thread_pending",
+    "commitments_reminders": "implemented_tested_installed_live_customer_send_not_authorized",
+    "ad_rotation": "catalogue_interval_cap_market_aware_installed",
+    "shorts": "oppo_exact_channel_title_visibility_verified_prior_uncertain_preserved",
+    "tiktok_feed": "owner_chat_and_autonomous_verified",
+    "tiktok_community": "chat_command_and_complete_post_discovery_live_verified_no_relevant_comment_candidate",
+    "tiktok_story": "historical_uncertain_no_replay",
+    "jobs_analysis_ui": "implemented_tested_installed",
+    "settings_version": "live_verified"
+  },
+  "remaining_live_limits": [
+    "TikTok Story exact publication remains unresolved",
+    "No >=0.8 relevant community post appeared, so public comment dispatch was not exercised",
+    "Meeting reminder was not sent to a real customer",
+    "Exact original cadence grid deadlines remain uncaptured",
+    "Some WhatsApp group/Terminal session holds remain for the next WhatsApp-focused phase"
+  ]
+}

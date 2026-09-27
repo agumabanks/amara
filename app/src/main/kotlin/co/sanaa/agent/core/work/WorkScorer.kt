@@ -38,6 +38,7 @@ object WorkScorer {
     fun defaultBaseValue(kind: WorkKind): Double = when (kind) {
         WorkKind.OWNER_SCHEDULED_COMMAND -> 500.0
         WorkKind.WA_FOLLOWUP -> 150.0
+        WorkKind.WA_MEETING_REMINDER -> 300.0
         WorkKind.WA_REPLY_INBOUND -> 300.0
         WorkKind.WA_BROADCAST -> 200.0
         WorkKind.SOKO_AUDIT -> 200.0
@@ -65,6 +66,7 @@ object WorkScorer {
     fun defaultHalfLife(kind: WorkKind): Double = when (kind) {
         WorkKind.OWNER_SCHEDULED_COMMAND -> 2.0
         WorkKind.WA_FOLLOWUP -> 12.0
+        WorkKind.WA_MEETING_REMINDER -> 0.1
         WorkKind.WA_REPLY_INBOUND -> 1.0
         WorkKind.WA_BROADCAST -> 4.0
         WorkKind.SOKO_AUDIT -> 8.0
@@ -92,6 +94,7 @@ object WorkScorer {
     fun defaultScreenSeconds(kind: WorkKind): Int = when (kind) {
         WorkKind.OWNER_SCHEDULED_COMMAND -> 120
         WorkKind.WA_FOLLOWUP -> 40
+        WorkKind.WA_MEETING_REMINDER -> 40
         WorkKind.WA_REPLY_INBOUND -> 45
         WorkKind.WA_BROADCAST -> 60
         WorkKind.SOKO_AUDIT -> 180
@@ -119,6 +122,7 @@ object WorkScorer {
     fun defaultRiskTier(kind: WorkKind): RiskTier = when (kind) {
         WorkKind.OWNER_SCHEDULED_COMMAND -> RiskTier.MEDIUM
         WorkKind.WA_FOLLOWUP -> RiskTier.MEDIUM
+        WorkKind.WA_MEETING_REMINDER -> RiskTier.MEDIUM
         WorkKind.WA_REPLY_INBOUND -> RiskTier.MEDIUM
         WorkKind.WA_BROADCAST -> RiskTier.MEDIUM
         WorkKind.SOKO_AUDIT -> RiskTier.LOW

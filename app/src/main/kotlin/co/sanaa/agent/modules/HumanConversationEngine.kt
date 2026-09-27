@@ -49,11 +49,13 @@ class HumanConversationEngine(
     private val ownerContext: () -> String = { "" },
     private val groupContext: (String) -> String = { "" },
     private val groupReplyAllowed: (String, String) -> Boolean = { _, _ -> true },
+    private val openConsultation: (String, String, String, String, String) -> String = { _, _, _, _, _ -> "" },
 ) {
     companion object {
         private const val TAG = "HumanConversation"
         private const val MAX_RAW_MESSAGES = 8
         private const val SUMMARY_INTERVAL = 6 // Generate new summary every 6 messages
+        internal const val REPLY_MODEL_BUDGET_MS = 25_000L
 
         internal fun shouldEnrollTrustedInbound(
             alwaysOn: Boolean,
@@ -97,6 +99,7 @@ class HumanConversationEngine(
         trustedWhatsAppNotification: Boolean = false,
         inboundWorkKey: String = "",
         conversationIdentity: String = "",
+        originalMessageAt: Long = 0L,
     ): ReplyResult {
         try {
             if (!config.whatsAppAutomationEnabled || !config.whatsAppInboundEnabled) {
@@ -157,12 +160,13 @@ class HumanConversationEngine(
                 return ReplyResult.Escalate("Customer content triggered the instruction-injection guard")
             }
             // Opens and proves the exact destination before model generation/sending.
-            val visibleConversation = actions.readWhatsAppConversation(
-                chatKey,
-                // Current screen plus durable chat history/summaries supplies the
-                // reply context; do not navigate four older screens on every reply.
-                maxScrolls = 0,
-                inboundMessage = message,
+            val visibleConversation = if (routed) {
+                // openWhatsAppOrigin already proved the exact notification route.
+                // Reopening a phone-number target here loses that proof and fails on
+                // WhatsApp builds whose contact-info screen hides the raw number.
+                actions.readWhatsAppOriginConversation(chatKey, message, maxScrolls = 0)
+            } else actions.readWhatsAppConversation(
+                chatKey, maxScrolls = 0, inboundMessage = message,
             )
             if (visibleConversation == null) {
                 return ReplyResult.Failed("Could not open and verify the exact WhatsApp chat: ${actions.lastWhatsAppNavigationFailure}")
@@ -170,14 +174,20 @@ class HumanConversationEngine(
             if (visibleConversation.alreadyAnswered) {
                 return ReplyResult.AlreadyAnswered("The inbound message already has a newer outgoing reply")
             }
-            // 1. Store incoming message
-            if(!(isGroup && routed)) chatStore.storeMessage(scopedKey, customerName, "received", message)
+            // 1. Store incoming message (original notification time kept as the event's
+            // original message time; dedup on stable event identity).
+            if(!(isGroup && routed)) chatStore.storeMessage(
+                scopedKey, customerName, "received", message,
+                originalAt = originalMessageAt.takeIf { it > 0 } ?: System.currentTimeMillis(),
+            )
 
             // 2. Get current state
             val currentStage = runCatching { ConversationStage.valueOf(chatStore.getStage(scopedKey)) }
                 .getOrDefault(ConversationStage.GREETING)
             val summary = chatStore.getSummary(scopedKey)
-            val recentMessages = chatStore.getChatHistory(scopedKey, MAX_RAW_MESSAGES)
+            // Long-term recall: recent turns of any age plus keyword-matched older
+            // evidence under a bounded budget — not just the last two days.
+            val recentMessages = chatStore.getRecentTurns(scopedKey, MAX_RAW_MESSAGES)
             if (ConversationReplyPolicy.needsNoReply(message, recentMessages)) {
                 return ReplyResult.NoReplyNeeded("The customer acknowledged a completed exchange")
             }
@@ -185,10 +195,14 @@ class HumanConversationEngine(
             check(shopIdentity().scope == shop.scope) { "Terminal shop changed during reply preparation" }
             val services = emptyList<String>()
 
-            // 3. Build prompt
+            // 3. Build prompt — with keyword-matched older evidence from long-term
+            // memory so agreements, corrections and promises from weeks ago are recalled.
+            val olderEvidence = runCatching {
+                chatStore.recallOlderEvidence(scopedKey, summary, recentMessages)
+            }.getOrDefault("")
             val prompt = buildPrompt(
                 customerName, message, currentStage, summary, recentMessages,
-                products, services, isGroup, visibleConversation.asPrompt() + if (isGroup) "\n" + groupContext(contact.id) else "", knowledge?.recall(scopedKey).orEmpty(), shop.name,
+                products, services, isGroup, visibleConversation.asPrompt() + if (isGroup) "\n" + groupContext(contact.id) else "", knowledge?.recall(scopedKey).orEmpty(), shop.name, olderEvidence,
             )
 
             val commerce = if(isGroup) null else try {
@@ -205,14 +219,17 @@ class HumanConversationEngine(
                 existing ?: (if(commerce != null) JSONObject().put("messages",org.json.JSONArray().put(commerce))
                     .put("stage",currentStage.name).put("escalate",commerce.contains("manager",true))
                     .put("escalation_reason","Delivery/payment details need confirmation")
-                    else groq.completeJson(prompt, null, correlationId)).let { generated ->
+                    else kotlinx.coroutines.withTimeoutOrNull(REPLY_MODEL_BUDGET_MS) {
+                        groq.completeJson(prompt, null, correlationId)
+                    } ?: WhatsAppReplyFallback.forMessage(message, currentStage)).let { generated ->
                     if (inboundWorkKey.isNotBlank()) replyDrafts?.bind(draftKey, generated) ?: generated else generated
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "LLM call failed", e)
-                return ReplyResult.Failed("LLM error: ${e.message}")
+                val generated = WhatsAppReplyFallback.forMessage(message, currentStage)
+                if (inboundWorkKey.isNotBlank()) replyDrafts?.bind(draftKey, generated) ?: generated else generated
             }
 
             // 5. Parse response
@@ -246,8 +263,13 @@ class HumanConversationEngine(
             if(completeReply.isBlank()) return ReplyResult.Failed("Reply had no useful text after tone checks")
             if(routed && !actions.isVerifiedWhatsAppOrigin(chatKey,message))
                 return ReplyResult.Failed("Originating conversation changed during reply preparation")
-            val outcome = sendMessage(chatKey, completeReply, draftKey, if(routed) message else null,conversationIdentity,shop.scope)
-            if (outcome !is SideEffectOutcome.Verified && outcome !is SideEffectOutcome.DuplicateBlocked) {
+            val outcome = sendMessage(chatKey, completeReply, draftKey, if(routed) message else null,conversationIdentity,shop.scope,inboundWorkKey)
+            if (outcome is SideEffectOutcome.DuplicateBlocked) {
+                return if (outcome.existingState == co.sanaa.agent.core.SideEffectState.VERIFIED)
+                    ReplyResult.AlreadyAnswered("The same reply was already verified")
+                else ReplyResult.Escalate("An earlier reply attempt is ${outcome.existingState}; no replay")
+            }
+            if (outcome !is SideEffectOutcome.Verified) {
                 val reason = when(outcome) {
                     is SideEffectOutcome.Uncertain -> "Delivery uncertain: ${outcome.reason}"
                     is SideEffectOutcome.Failed -> "Send not completed: ${outcome.reason}"
@@ -259,8 +281,10 @@ class HumanConversationEngine(
             chatStore.storeMessage(scopedKey, "Amara", "sent", completeReply)
             chatStore.updateSummary(scopedKey, newSummary.takeLast(8_000), newStage.name)
             if (!isGroup && (shouldEscalate || (newStage != currentStage && newStage in setOf(ConversationStage.CLOSING, ConversationStage.CONFIRMED)))) {
+                val source = inboundWorkKey.ifBlank { "$scopedKey:${co.sanaa.agent.core.ContentHashing.hash(message)}" }
+                val reference = if (shouldEscalate) openConsultation(source, shop.scope, contact.id, chatKey, message) else ""
                 managerReport(inboundWorkKey.ifBlank { "$scopedKey:${co.sanaa.agent.core.ContentHashing.hash(message)}" },
-                    "${if(shouldEscalate) "Customer inquiry" else "Customer ready to order — not yet confirmed in Soko"}\nChat: $customerName\nCustomer: ${message.take(500)}\nContext: ${newSummary.take(600)}\nNext step: ${if(shouldEscalate) escalationReason else "Review item, quantity, delivery and payment in Terminal"}")
+                    "${if(shouldEscalate) "Customer inquiry $reference" else "Customer ready to order — not yet confirmed in Soko"}\n${if(reference.isNotBlank()) "Reply with $reference followed by the customer-facing answer.\n" else ""}Chat: $customerName\nCustomer: ${message.take(500)}\nContext: ${newSummary.take(600)}\nNext step: ${if(shouldEscalate) escalationReason else "Review item, quantity, delivery and payment in Terminal"}")
             }
             if (shouldEscalate) {
                 return ReplyResult.HandedOff(listOf(completeReply), escalationReason)
@@ -291,6 +315,7 @@ class HumanConversationEngine(
         visibleConversation: String,
         rememberedFacts: String = "",
         shopName: String = "the verified shop",
+        olderEvidence: String = "",
     ): String {
         return buildString {
             appendLine(getPersona(shopName))
@@ -323,6 +348,12 @@ class HumanConversationEngine(
             if (recentMessages.isNotEmpty()) {
                 appendLine("LAST ${recentMessages.size} MESSAGES:")
                 recentMessages.forEach { appendLine("${it.direction}: ${Redactor.redact(TrustedContent.message(it.text).render())}") }
+                appendLine()
+            }
+
+            if (olderEvidence.isNotBlank()) {
+                appendLine("EARLIER EVIDENCE (older durable memory with original message times; newest confirmed corrections take precedence):")
+                appendLine(Redactor.redact(TrustedContent.message(olderEvidence).render()))
                 appendLine()
             }
 
@@ -434,7 +465,7 @@ class HumanConversationEngine(
      * Send a message via WhatsApp using the existing side-effect infrastructure.
      * This actually delivers the message to the customer.
      */
-    private suspend fun sendMessage(chatKey: String, message: String, eventKey: String = "", originMessage: String? = null, originIdentity: String = "", shopScope: String = ""): SideEffectOutcome {
+    internal suspend fun sendMessage(chatKey: String, message: String, eventKey: String = "", originMessage: String? = null, originIdentity: String = "", shopScope: String = "", workKey: String = ""): SideEffectOutcome {
         val idempotencyKey = "human-reply:${chatKey}:$eventKey:${co.sanaa.agent.core.ContentHashing.hash(message)}"
         // Navigation and draft preparation must not create an external transaction.
         if (!(if(originMessage!=null) actions.openWhatsAppOrigin(originIdentity,chatKey,originMessage)
@@ -446,6 +477,7 @@ class HumanConversationEngine(
             target = chatKey,
             content = message,
             inputs = mapOf("shop_scope" to shopScope, "target" to chatKey, "content" to message),
+            workKey = workKey,
             preflight = {
                 val entry=if(originIdentity.isNotBlank()) ContactDirectoryProvider.instance?.byId(originIdentity)
                     else (ContactDirectoryProvider.instance?.resolve(ContactQuery(name=chatKey,phone=Normalizer.normalizeUganda(chatKey))) as? Resolution.Unique)?.entry

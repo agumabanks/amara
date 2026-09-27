@@ -60,7 +60,7 @@ class AmaraWorkLoop(
     private val wakeSignal = Channel<WakeReason>(Channel.CONFLATED)
     @Volatile private var inspectionUntil = 0L
     fun pauseForInspection(durationMs: Long) {
-        if (co.sanaa.agent.BuildConfig.DEBUG) inspectionUntil = System.currentTimeMillis() + durationMs.coerceIn(0, 300_000)
+        inspectionUntil = System.currentTimeMillis() + durationMs.coerceIn(0, 300_000)
     }
 
 
@@ -88,6 +88,7 @@ class AmaraWorkLoop(
     private val lastSummary = AtomicReference("Waiting for the first autonomous cycle")
     private val waitingReasons = linkedSetOf<String>()
     private val blockers = WorkBlockers(executor.context)
+    private val batteryHold = BatteryWorkHold(executor.context)
 
     /**
      * Main loop entry point. Runs until cancelled.
@@ -107,8 +108,18 @@ class AmaraWorkLoop(
 
                 // SENSING: read world state
                 currentState = LoopState.SENSING
+                if (co.sanaa.agent.core.SecureConfig(executor.context).systemLockout) {
+                    lastSummary.set("System lockout is active${co.sanaa.agent.core.SecureConfig(executor.context).systemLockoutReason.takeIf { it.isNotBlank() }?.let { ": $it" } ?: ""}.")
+                    delay(5_000)
+                    continue
+                }
                 if (!co.sanaa.agent.core.OwnerPower(executor.context).isOn()) {
                     lastSummary.set("Amara is off. Queued work is held until the owner turns me on.")
+                    continue
+                }
+                if (co.sanaa.agent.core.SecureConfig(executor.context).remoteWorkPaused) {
+                    lastSummary.set("Work paused by an authorized Cards command; owner controls remain authoritative.")
+                    delay(5_000)
                     continue
                 }
                 val snapshot = sense()
@@ -260,8 +271,8 @@ class AmaraWorkLoop(
         val batteryPct = batteryIntent?.let {
             val level = it.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
             val scale = it.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
-            if (level >= 0 && scale > 0) (level * 100 / scale) else 50
-        } ?: 50
+            if (level >= 0 && scale > 0) (level * 100 / scale) else -1
+        } ?: -1
 
         val now = java.time.LocalTime.now()
         val hour = now.hour
@@ -317,7 +328,9 @@ class AmaraWorkLoop(
         val excludedKeys = mutableSetOf<String>()
 
         while (System.currentTimeMillis() < session.grant.hardStopAt && scope.isActive) {
+            if (co.sanaa.agent.core.SecureConfig(executor.context).systemLockout) break
             if (!co.sanaa.agent.core.OwnerPower(executor.context).isOn()) break
+            if (co.sanaa.agent.core.SecureConfig(executor.context).remoteWorkPaused) break
             // Re-sense before every atomic item. A session grant is not permission
             // to ignore a phone that became hot or low on battery after it began.
             val liveSnapshot = sense()
@@ -331,7 +344,7 @@ class AmaraWorkLoop(
                 timeFactor = { learnedTimeFactor(it, session.snapshot.currentHour) },
             ) ?: break
             if (System.currentTimeMillis() < inspectionUntil || liveSnapshot.ownerActive) break
-            if (shouldStopForDeviceHealth(liveSnapshot, item)) {
+            if (shouldStopForDeviceHealth(liveSnapshot, item, batteryHold.observe(liveSnapshot.batteryPercent))) {
                 blockers.deferred(item, budgeter.denialReason(liveSnapshot, item))
                 break
             }
@@ -428,20 +441,22 @@ class AmaraWorkLoop(
                     is RecoveryDecision.Escalate -> {
                         if(item.kind in setOf(WorkKind.WA_REPLY_INBOUND,WorkKind.WA_FOLLOWUP)) queue.requireReview(item,recovery.reason)
                         else queue.complete(item.dedupeKey)
-                        safelyReport { onEscalation(item, recovery.reason) }
+                        if (!(item.kind == WorkKind.WA_BROADCAST && result.status == WorkStatus.SKIPPED))
+                            safelyReport { onEscalation(item, recovery.reason) }
                     }
                     else -> {}
                 }
                 safelyReport { blockers.outcome(result, recovery) }
 
-                // Isolate this failing kind; do not strand unrelated work or replies.
-                if (item.kind != WorkKind.WA_REPLY_INBOUND) excludedKinds.add(item.kind)
+                // Group destinations have independent authorization and recovery.
+                // A held group must not consume the entire broadcast lane.
+                isolateAfterOutcome(item, excludedKinds, excludedKeys)
             } else if (result.status == WorkStatus.ESCALATED) {
                 safelyReport { blockers.outcome(result) }
                 if(item.kind in setOf(WorkKind.WA_REPLY_INBOUND,WorkKind.WA_FOLLOWUP)) queue.requireReview(item,result.failure?.summary ?: "Unresolved reply")
                 else queue.complete(item.dedupeKey)
                 result.failure?.let { failure -> safelyReport { onEscalation(item, failure.summary) } }
-                if (item.kind != WorkKind.WA_REPLY_INBOUND) excludedKinds.add(item.kind)
+                isolateAfterOutcome(item, excludedKinds, excludedKeys)
             }
 
             // Durable disposition precedes fallible analytics; telemetry cannot strand work.
@@ -486,6 +501,15 @@ class AmaraWorkLoop(
     }
 
     companion object {
+        internal fun isolateAfterOutcome(item: WorkItem, excludedKinds: MutableSet<WorkKind>, excludedKeys: MutableSet<String>) {
+            when (item.kind) {
+                WorkKind.WA_REPLY_INBOUND -> Unit
+                WorkKind.WA_BROADCAST -> if (item.payload.optString("group_target").isNotBlank())
+                    excludedKeys.add(item.dedupeKey) else excludedKinds.add(item.kind)
+                else -> excludedKinds.add(item.kind)
+            }
+        }
+
         internal suspend fun isolateReporting(block: suspend () -> Unit, onFailure: () -> Unit) {
             try { block() } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -493,7 +517,11 @@ class AmaraWorkLoop(
             }
         }
         internal fun itemTimeoutMs(kind: WorkKind): Long = when (kind) {
-            WorkKind.WA_REPLY_INBOUND -> 90_000L
+            // Reply preparation includes exact notification-route proof, a bounded
+            // model call and a 90s delivery verifier. The former 90s outer timeout
+            // could cancel a valid transaction before its verifier finished.
+            WorkKind.WA_REPLY_INBOUND -> 180_000L
+            WorkKind.WA_BROADCAST -> 240_000L
             WorkKind.YOUTUBE_SHORT_PUBLISH -> 600_000L
             WorkKind.TIKTOK_POST_PUBLISH -> 480_000L // Render/session recovery plus the bounded publication transaction.
             WorkKind.TIKTOK_STORY_PUBLISH -> 420_000L
@@ -508,11 +536,11 @@ class AmaraWorkLoop(
             else -> ThermalState.NORMAL
         }
 
-        internal fun shouldStopForDeviceHealth(snapshot: WorldSnapshot, item: WorkItem? = null): Boolean =
+        internal fun shouldStopForDeviceHealth(snapshot: WorldSnapshot, item: WorkItem? = null, batteryHeld: Boolean = false): Boolean =
             (snapshot.thermalState == ThermalState.HOT &&
                 item?.payload?.optBoolean("owner_canary", false) != true &&
                 item?.payload?.optBoolean("owner_command", false) != true) ||
-                snapshot.batteryPercent <= 15
+                snapshot.batteryPercent <= 15 || batteryHeld
     }
 
     private fun buildReportSummary(results: List<WorkResult>): String {
