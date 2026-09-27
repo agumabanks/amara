@@ -4,6 +4,42 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanaa_agent_ui/screens/settings/settings_screen.dart';
 
 void main() {
+  testWidgets('work evidence export requires the visible owner opt-in', (
+    tester,
+  ) async {
+    const channel = MethodChannel('com.sanaa.agent/core');
+    final writes = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'amaraSettings') {
+            if (call.method == 'amaraSettings')
+              return {'telemetryOptIn': false};
+          }
+          if (call.method == 'setAmaraSetting') {
+            if (call.method == 'setAmaraSetting') writes.add(call);
+          }
+          return true;
+        });
+    await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Memory & Recovery'), 250);
+    await tester.tap(find.text('Memory & Recovery'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Share work evidence with Cards'));
+    final row = find
+        .ancestor(
+          of: find.text('Share work evidence with Cards'),
+          matching: find.byType(Row),
+        )
+        .first;
+    await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
+    await tester.pumpAndSettle();
+    expect(writes.single.arguments, {'key': 'telemetryOptIn', 'value': true});
+    await tester.pumpWidget(const SizedBox.shrink());
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null);
+  });
+
   testWidgets('YouTube has independent controls and truthful activity counts', (
     tester,
   ) async {
@@ -11,7 +47,7 @@ void main() {
     final writes = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-          if (call.method == 'amaraSettings')
+          if (call.method == 'amaraSettings') {
             return {
               'youtubeEnabled': false,
               'youtubeChannel': '@sanaa',
@@ -32,7 +68,10 @@ void main() {
                 },
               },
             };
-          if (call.method == 'setAmaraSetting') writes.add(call);
+          }
+          if (call.method == 'setAmaraSetting') {
+            writes.add(call);
+          }
           return true;
         });
     await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));

@@ -4,6 +4,7 @@ import 'whatsapp_groups_screen.dart';
 
 import 'package:flutter/material.dart';
 import '../../bridge/agent_channel.dart';
+import '../commercial/commercial_screen.dart';
 import '../contacts/contact_permissions_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -87,6 +88,39 @@ class _SettingsScreenState extends State<SettingsScreen>
       ),
     );
     if (value != null && mounted) await _updateSetting('youtubeChannel', value);
+    input.dispose();
+  }
+
+  Future<void> _setYouTubeTimezone() async {
+    final input = TextEditingController(
+      text: _settings['youtubeTimezone'] as String? ?? '',
+    );
+    final value = await showDialog<String>(
+      context: context,
+      builder: (dialog) => AlertDialog(
+        title: const Text('YouTube posting time zone'),
+        content: TextField(
+          controller: input,
+          decoration: const InputDecoration(
+            labelText: 'IANA time zone',
+            hintText: 'Africa/Kampala',
+          ),
+          autocorrect: false,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialog),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialog, input.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (value != null && mounted)
+      await _updateSetting('youtubeTimezone', value);
     input.dispose();
   }
 
@@ -421,6 +455,20 @@ class _SettingsScreenState extends State<SettingsScreen>
                   trailing: const Icon(Icons.devices),
                   onTap: _pairDevice,
                 ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Commercial policy'),
+                  subtitle: const Text(
+                    'Business timezone, outreach rules and consent.',
+                  ),
+                  trailing: const Icon(Icons.tune),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      settings: const RouteSettings(name: '/commercial'),
+                      builder: (_) => const CommercialScreen(),
+                    ),
+                  ),
+                ),
                 ExpansionTile(
                   tilePadding: EdgeInsets.zero,
                   title: Text('Soko Access'),
@@ -669,8 +717,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                             )
                             .toList(),
                         onChanged: (value) {
-                          if (value != null)
+                          if (value != null) {
                             _updateSetting('youtubeVisibility', value);
+                          }
                         },
                       ),
                     ),
@@ -684,6 +733,15 @@ class _SettingsScreenState extends State<SettingsScreen>
                       _settings['youtubeIntervalMinutes'] ?? 240,
                       [10, 30, 60, 120, 240, 480, 1440],
                       (v) => _updateSetting('youtubeIntervalMinutes', v),
+                    ),
+                    ListTile(
+                      title: const Text('Posting time zone'),
+                      subtitle: Text(
+                        _settings['youtubeTimezone'] as String? ??
+                            'Device time zone',
+                      ),
+                      trailing: const Icon(Icons.schedule_outlined),
+                      onTap: _setYouTubeTimezone,
                     ),
                     _buildSliderRow(
                       'Daily Shorts cap',
@@ -712,25 +770,24 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                       trailing: const Icon(Icons.fact_check_outlined),
                       onTap: () async {
+                        final messenger = ScaffoldMessenger.of(context);
                         try {
                           final message = await const MethodChannel(
                             'com.sanaa.agent/core',
                           ).invokeMethod<String>('checkYouTubePreparation');
-                          if (mounted)
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(message ?? 'Check queued'),
-                              ),
-                            );
+                          if (!mounted) return;
+                          messenger.showSnackBar(
+                            SnackBar(content: Text(message ?? 'Check queued')),
+                          );
                         } on PlatformException catch (e) {
-                          if (mounted)
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  e.message ?? 'Could not queue check',
-                                ),
+                          if (!mounted) return;
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                e.message ?? 'Could not queue check',
                               ),
-                            );
+                            ),
+                          );
                         }
                       },
                     ),
@@ -845,6 +902,22 @@ class _SettingsScreenState extends State<SettingsScreen>
                   tilePadding: EdgeInsets.zero,
                   title: Text('Memory & Recovery'),
                   children: [
+                    _buildToggleRow(
+                      'Share device health with Cards',
+                      _settings['operationalReportingEnabled'] == true,
+                      (v) => _updateSetting('operationalReportingEnabled', v),
+                    ),
+                    const Text(
+                      'Sends battery, worker availability and queue count about every five minutes while Amara is on. No conversations or product content are included.',
+                    ),
+                    _buildToggleRow(
+                      'Share work evidence with Cards',
+                      _settings['telemetryOptIn'] == true,
+                      (v) => _updateSetting('telemetryOptIn', v),
+                    ),
+                    const Text(
+                      'Sends shop-scoped job status, attempt IDs and error categories after reconnect. No customer messages, raw prompts, phone numbers or product content are included.',
+                    ),
                     _buildToggleRow(
                       'Back up relationship memory',
                       _settings['memoryBackupEnabled'] == true,
@@ -979,6 +1052,20 @@ class _SettingsScreenState extends State<SettingsScreen>
                       'Learns from blockers, compacts stale queue entries, and clears only orphaned waits. It never retries uncertain sends or posts.',
                     ),
                   ],
+                ),
+                const SizedBox(height: 28),
+                Center(
+                  child: Text(
+                    'Amara ${_settings['appVersion'] ?? 'Unknown'} '
+                    '(build ${_settings['appBuild'] ?? '—'})\n'
+                    '${_settings['deviceModel'] ?? 'This device'}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white38,
+                      fontSize: 12,
+                      height: 1.5,
+                    ),
+                  ),
                 ),
               ],
             ),

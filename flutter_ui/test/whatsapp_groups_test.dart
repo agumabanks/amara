@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import '../lib/screens/settings/whatsapp_groups_screen.dart';
+import 'package:sanaa_agent_ui/screens/settings/whatsapp_groups_screen.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -12,7 +12,7 @@ void main() {
     final updates = <Map<dynamic, dynamic>>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-          if (call.method == 'whatsappGroupSettings')
+          if (call.method == 'whatsappGroupSettings') {
             return ['group-first', 'group-second']
                 .map(
                   (id) => {
@@ -27,8 +27,10 @@ void main() {
                   },
                 )
                 .toList();
-          if (call.method == 'updateWhatsappGroup')
+          }
+          if (call.method == 'updateWhatsappGroup') {
             updates.add(call.arguments as Map);
+          }
           return true;
         });
     await tester.pumpWidget(const MaterialApp(home: WhatsAppGroupsScreen()));
@@ -42,18 +44,31 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
   });
-  testWidgets('paused promotions resume only the selected group', (tester) async {
+  testWidgets('paused promotions resume only the selected group', (
+    tester,
+  ) async {
     final updates = <Map<dynamic, dynamic>>[];
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'whatsappGroupSettings') return [{
-        'id': 'paused-group', 'name': 'Checked group', 'listen': true,
-        'reply': false, 'promote': true, 'paused': true,
-        'lastReason': 'WhatsApp returned no matching recipient.',
-        'intervalMinutes': 60,
-      }];
-      if (call.method == 'updateWhatsappGroup') updates.add(call.arguments as Map);
-      return true;
-    });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'whatsappGroupSettings') {
+            return [
+              {
+                'id': 'paused-group',
+                'name': 'Checked group',
+                'listen': true,
+                'reply': false,
+                'promote': true,
+                'paused': true,
+                'lastReason': 'WhatsApp returned no matching recipient.',
+                'intervalMinutes': 60,
+              },
+            ];
+          }
+          if (call.method == 'updateWhatsappGroup') {
+            updates.add(call.arguments as Map);
+          }
+          return true;
+        });
     await tester.pumpWidget(const MaterialApp(home: WhatsAppGroupsScreen()));
     await tester.pumpAndSettle();
     expect(find.textContaining('no matching recipient'), findsOneWidget);
@@ -61,8 +76,12 @@ void main() {
     await tester.ensureVisible(resume);
     await tester.tap(resume);
     await tester.pumpAndSettle();
-    expect(updates.single, {'id': 'paused-group', 'field': 'resume', 'value': true});
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+    expect(updates.single, {
+      'id': 'paused-group',
+      'field': 'resume',
+      'value': true,
+    });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null);
   });
-
 }

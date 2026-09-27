@@ -32,6 +32,26 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      # app/build.gradle declares `implementation project(":flutter")` and
+      # settings.gradle applies flutter_ui/.android/include_flutter.groovy. Both only
+      # exist after `flutter pub get` runs, and that glue file is gitignored — so a
+      # bare checkout has neither, and the Gradle job died at settings evaluation on
+      # all three previous CI runs ("Could not read script
+      # .../include_flutter.groovy as it does not exist"). Generate the glue first.
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.35.2'
+          cache: true
+
+      # Must satisfy flutter_ui/pubspec.yaml `environment: sdk: ^3.9.0`. This
+      # workflow previously pinned 3.24.5 (Dart 3.5.x), which cannot resolve that
+      # constraint, so `flutter pub get` also failed in the Flutter job.
+      - name: flutter pub get
+        working-directory: flutter_ui
+        run: flutter pub get
+
       - name: Run unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
 
@@ -52,7 +72,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.24.5'
+          flutter-version: '3.35.2'
           cache: true
 
       - name: flutter pub get
@@ -74,6 +94,11 @@ jobs:
   mission-gates:
     name: Mission gates (boundary + redaction)
     runs-on: ubuntu-latest
+    # The negative-fixture harness re-runs the full traceability audit once per
+    # defective matrix (23 cases). Each audit is ~3-4 minutes because it re-parses
+    # every JUnit XML and re-scans app/src/main, so budget ~90 min explicitly rather
+    # than relying on the 360-minute default and discovering the cost as a hang.
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -134,6 +159,20 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
+
+      # Same reason as the gradle job: settings.gradle and app/build.gradle both
+      # need the generated Flutter glue before Gradle can evaluate or resolve
+      # project(":flutter").
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.35.2'
+          cache: true
+
+      - name: flutter pub get
+        working-directory: flutter_ui
+        run: flutter pub get
 
       - name: Run unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon

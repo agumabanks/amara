@@ -4,6 +4,9 @@ import 'package:flutter/services.dart';
 
 import 'package:flutter/material.dart';
 import '../../bridge/agent_channel.dart';
+import '../receipts/receipts_screen.dart';
+import 'meeting_commitments_screen.dart';
+import 'jobs_analysis_screen.dart';
 
 class WorkScreen extends StatefulWidget {
   const WorkScreen({super.key});
@@ -73,6 +76,24 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
           'This closes the currently listed holds and retains their history. It will not send messages, verify delivery, or stop pending and running tasks.',
         ),
         actions: [
+          IconButton(
+            tooltip: 'Jobs and analysis',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const JobsAnalysisScreen()),
+            ),
+            icon: const Icon(Icons.analytics_outlined),
+          ),
+          IconButton(
+            tooltip: 'Meetings and reminders',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const MeetingCommitmentsScreen(),
+              ),
+            ),
+            icon: const Icon(Icons.event_note_outlined),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
@@ -105,7 +126,7 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
       );
       await _refresh();
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -113,6 +134,7 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
             ),
           ),
         );
+      }
     }
   }
 
@@ -201,6 +223,14 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
         ),
         actions: [
           IconButton(
+            tooltip: 'All post and send receipts',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ReceiptsScreen()),
+            ),
+            icon: const Icon(Icons.receipt_long_outlined),
+          ),
+          IconButton(
             tooltip: 'Check for work now',
             onPressed: () async {
               await AgentChannel.wakeAutonomousLoop();
@@ -218,7 +248,7 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(18, 4, 18, 40),
                 children: [
-                  _loopCard(loop, queueItems.length),
+                  _loopCard(loop, queueItems.length, queue),
                   const SizedBox(height: 20),
                   if (reviewItems.isNotEmpty) ...[
                     Align(
@@ -353,7 +383,11 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _loopCard(Map<String, dynamic> loop, int queued) {
+  Widget _loopCard(
+    Map<String, dynamic> loop,
+    int queued,
+    Map<String, dynamic> queue,
+  ) {
     final running = loop['running'] == true;
     return Container(
       padding: const EdgeInsets.all(18),
@@ -391,6 +425,15 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
             ],
           ),
           const SizedBox(height: 12),
+          Text(
+            '${queue['dueCount'] ?? 0} due now • ${queue['scheduledCount'] ?? 0} scheduled for later',
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          if ((queue['nextDueAt'] as num? ?? 0) > 0)
+            Text(
+              'Next scheduled work: ${_dateTime(queue['nextDueAt'])}',
+              style: const TextStyle(color: Colors.white60, fontSize: 12),
+            ),
           Text(
             'Last wake: ${_pretty(loop['lastWakeReason'])}',
             style: const TextStyle(color: Colors.white60, fontSize: 12),
@@ -468,7 +511,7 @@ class _WorkScreenState extends State<WorkScreen> with WidgetsBindingObserver {
             style: const TextStyle(fontWeight: FontWeight.w700),
           ),
           subtitle: Text(
-            '${_pretty(item['domain'])} • ${_pretty(item['risk'])} risk • attempt ${item['attempt']}',
+            '${item['due'] == true ? 'Due now' : 'Scheduled: ${_dateTime(item['notBefore'])}'}\n${_pretty(item['domain'])} • ${_pretty(item['risk'])} risk • attempt ${item['attempt']}',
             style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
           trailing: Column(

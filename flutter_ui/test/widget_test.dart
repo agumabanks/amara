@@ -21,9 +21,15 @@ void main() {
               'notifications': false,
             };
           }
-          if (call.method == 'syncConfig') return true;
-          if (call.method == 'chatHistory') return <dynamic>[];
-          if (call.method == 'operationalHealth') return <String, dynamic>{};
+          if (call.method == 'syncConfig') {
+            if (call.method == 'syncConfig') return true;
+          }
+          if (call.method == 'chatHistory') {
+            if (call.method == 'chatHistory') return <dynamic>[];
+          }
+          if (call.method == 'operationalHealth') {
+            if (call.method == 'operationalHealth') return <String, dynamic>{};
+          }
           return false;
         });
   });
@@ -47,7 +53,9 @@ void main() {
   ) async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-          if (call.method == 'setupComplete') return false;
+          if (call.method == 'setupComplete') {
+            if (call.method == 'setupComplete') return false;
+          }
           if (call.method == 'syncConfig') {
             throw PlatformException(
               code: 'SYNC_ERROR',
@@ -89,22 +97,135 @@ void main() {
     expect(find.text('Send Task'), findsNothing);
   });
 
+  testWidgets(
+    'low battery and offline warning stays visible above other blockers',
+    (tester) async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            if (call.method == 'chatHistory') {
+              if (call.method == 'chatHistory') return <dynamic>[];
+            }
+            if (call.method == 'operationalHealth') {
+              return <String, dynamic>{
+                'healthy': false,
+                'blockers': [
+                  'Model credential needs attention',
+                  'No internet connection',
+                ],
+                'batteryPercent': 14,
+                'network': 'OFFLINE',
+                'pendingWorkCount': 3,
+                'loop': {'lastSummary': 'Waiting for connection'},
+              };
+            }
+            return false;
+          });
+      await tester.pumpWidget(const MaterialApp(home: ChatScreen()));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Connect charger'), findsOneWidget);
+      expect(find.textContaining('Restore internet'), findsOneWidget);
+      expect(find.textContaining('Queued work: 3'), findsOneWidget);
+    },
+  );
+
+  testWidgets('unknown battery does not show a false charger warning', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'chatHistory') {
+            if (call.method == 'chatHistory') return <dynamic>[];
+          }
+          if (call.method == 'operationalHealth') {
+            return <String, dynamic>{
+              'healthy': true,
+              'blockers': <String>[],
+              'batteryPercent': -1,
+              'network': 'ONLINE',
+            };
+          }
+          return false;
+        });
+    await tester.pumpWidget(const MaterialApp(home: ChatScreen()));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Connect charger'), findsNothing);
+  });
+
+  testWidgets('battery hysteresis shows the actual paused state at 18%', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'chatHistory') {
+            if (call.method == 'chatHistory') return <dynamic>[];
+          }
+          if (call.method == 'operationalHealth') {
+            return <String, dynamic>{
+              'healthy': false,
+              'blockers': ['Battery work paused'],
+              'batteryPercent': 18,
+              'batteryPaused': true,
+              'network': 'ONLINE',
+            };
+          }
+          return false;
+        });
+    await tester.pumpWidget(const MaterialApp(home: ChatScreen()));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Screen work is paused until 20%'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('unknown reading preserves a previous battery pause', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          if (call.method == 'chatHistory') {
+            if (call.method == 'chatHistory') return <dynamic>[];
+          }
+          if (call.method == 'operationalHealth') {
+            return <String, dynamic>{
+              'healthy': false,
+              'blockers': ['Battery reading unavailable'],
+              'batteryPercent': -1,
+              'batteryPaused': true,
+              'network': 'ONLINE',
+            };
+          }
+          return false;
+        });
+    await tester.pumpWidget(const MaterialApp(home: ChatScreen()));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Screen work remains paused'), findsOneWidget);
+  });
+
   testWidgets('shows the Observe Analyze Act Report flow and receipt', (
     tester,
   ) async {
     final result = Completer<Map<String, dynamic>>();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-          if (call.method == 'chatHistory') return <dynamic>[];
-          if (call.method == 'operationalHealth') return <String, dynamic>{};
+          if (call.method == 'chatHistory') {
+            if (call.method == 'chatHistory') return <dynamic>[];
+          }
+          if (call.method == 'operationalHealth') {
+            if (call.method == 'operationalHealth') return <String, dynamic>{};
+          }
           if (call.method == 'autonomyStatus') {
             return <String, String>{
               'phase': 'analyze',
               'detail': 'Choosing the safest useful action',
             };
           }
-          if (call.method == 'submitTask') return result.future;
-          if (call.method == 'stopCurrentTask') return true;
+          if (call.method == 'submitTask') {
+            if (call.method == 'submitTask') return result.future;
+          }
+          if (call.method == 'stopCurrentTask') {
+            if (call.method == 'stopCurrentTask') return true;
+          }
           return false;
         });
 
