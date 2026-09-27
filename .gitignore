@@ -16,7 +16,13 @@ flutter_ui/build/
 flutter_ui/sanaa_agent_ui.iml
 flutter_ui/sanaa_agent_ui_android.iml
 flutter_ui/pubspec.lock
-artifacts/
+# Evidence/artifact dumps live at the repo root. Anchor the rule to the root so it
+# cannot swallow production source directories that happen to be named "artifacts" —
+# app/src/main/kotlin/co/sanaa/agent/core/artifacts/ contains ArtifactEngine.kt and
+# ArtifactDelivery.kt, which the whole build depends on, and the unanchored rule
+# excluded them from the repository, breaking every clean checkout at
+# :app:compileDebugKotlin.
+/artifacts/
 evidence/
 deleted-tenants-sql-backups-*.zip
 Untitled-*.log
